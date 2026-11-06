@@ -199,8 +199,9 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     {
         chooser = std::make_unique<juce::FileChooser>("Choose a WAV or AIFF sample", juce::File(),
                                                         "*.wav;*.aif;*.aiff");
+        auto safe = juce::Component::SafePointer<CheckmateEditor>(this);
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [safe = juce::Component::SafePointer<CheckmateEditor>(this)](const juce::FileChooser &c)
+            [safe](const juce::FileChooser &c)
             {
                 if (!safe || c.getResult() == juce::File()) return;
                 juce::String error;
