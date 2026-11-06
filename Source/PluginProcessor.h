@@ -1,5 +1,6 @@
 #pragma once
 #include "Chess.h"
+#include "GameSequence.h"
 #include "Synth.h"
 #include <JuceHeader.h>
 class CheckmateProcessor final : public juce::AudioProcessor
@@ -41,6 +42,16 @@ class CheckmateProcessor final : public juce::AudioProcessor
     void setSession(juce::ValueTree);
     checkmate::Settings currentSettings() const;
     juce::MidiFile matrixMidi() const;
+    juce::MidiFile gameMidi() const;
+    struct GameBank { std::array<checkmate::MusicalGame, 3> tracks; };
+    GameBank gameSnapshot() const;
+    void publishGames(GameBank updated);
+    void saveMatrixSlot(int slot);
+    void loadMatrixSlot(int slot);
+    bool loadPieceSample(int piece, const juce::File &file, juce::String &error);
+    void clearPieceSample(int piece);
+    std::array<juce::String, 6> pieceSamplePaths() const;
+    void reloadSamplePaths();
 
   private:
     struct Event
@@ -54,12 +65,24 @@ class CheckmateProcessor final : public juce::AudioProcessor
     std::array<std::array<int64_t, 128>, 6> gates{};
     std::array<std::atomic<float> *, 26> globals{};
     std::array<std::array<std::atomic<float> *, 7>, 6> pieceParams{};
+    std::array<std::atomic<float> *, 3> laneParameters{};
     juce::MidiBuffer output;
+    struct SampleBank { std::array<const checkmate::SampleData *, 6> pieces{}; };
+    std::atomic<const GameBank *> gameData{nullptr};
+    mutable std::atomic<int> gameReaders{0};
+    std::atomic<const SampleBank *> sampleData{nullptr};
+    mutable juce::CriticalSection dataLock;
+    std::vector<std::unique_ptr<GameBank>> gameVersions;
+    std::vector<std::unique_ptr<SampleBank>> sampleVersions;
+    std::vector<std::unique_ptr<checkmate::SampleData>> sampleStorage;
+    std::array<juce::String, 6> samplePaths{};
+    std::array<std::array<int, 64>, 16> matrixSlots{};
     struct Future
     {
         int64_t when = 0;
         int note = 0, piece = 0;
         float velocity = 0;
+        int gateSamples = 0, synthNote = -1;
     };
     std::array<Future, 128> future{};
     int blockSamples = 0;
@@ -69,8 +92,11 @@ class CheckmateProcessor final : public juce::AudioProcessor
     bool wasRunning = false, wasHostPlaying = false;
     mutable juce::CriticalSection sessionLock;
     juce::ValueTree session{"SESSION"};
-    void trigger(int square, int signedPiece, int action, int offset, juce::MidiBuffer &);
-    void generated(int note, int piece, float velocity, int offset, juce::MidiBuffer &, int delaySamples = 0);
+    void trigger(int square, int signedPiece, int action, int offset, juce::MidiBuffer &, int delaySamples = 0);
+    void triggerGame(const checkmate::MusicalMove &, int offset, juce::MidiBuffer &, bool drums,
+                     double playbackBpm, int delaySamples = 0);
+    void generated(int note, int piece, float velocity, int offset, juce::MidiBuffer &, int delaySamples = 0,
+                   int gateSamples = 0, int synthNote = -1);
     void stopGenerated(int offset, juce::MidiBuffer &);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CheckmateProcessor)
 };

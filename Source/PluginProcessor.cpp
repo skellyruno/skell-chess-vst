@@ -19,7 +19,14 @@ CheckmateProcessor::CheckmateProcessor()
     for (int p = 0; p < 6; ++p)
         for (int f = 0; f < 7; ++f)
             pieceParams[p][f] = parameters.getRawParameterValue("p" + juce::String(p) + "_" + fields[f]);
+    for (int lane = 0; lane < 3; ++lane)
+        laneParameters[size_t(lane)] = parameters.getRawParameterValue("lane" + juce::String(lane));
     loadPattern(0);
+    saveMatrixSlot(0);
+    publishGames(GameBank{});
+    auto emptyBank = std::make_unique<SampleBank>();
+    sampleData.store(emptyBank.get(), std::memory_order_release);
+    sampleVersions.push_back(std::move(emptyBank));
 }
 juce::AudioProcessorValueTreeState::ParameterLayout CheckmateProcessor::createLayout()
 {
@@ -77,6 +84,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout CheckmateProcessor::createLa
     choice("midiPiece", "MIDI voice", {"Pawn", "Knight", "Bishop", "Rook", "Queen", "King", "Channel 1-6"},
            6);
     boolean("bot", "Black bot", false);
+    choice("botStyle", "Bot style", {"Balanced", "Aggressive", "Defensive", "Experimental"}, 0);
+    boolean("gamePlayback", "Game sequencer", false);
+    boolean("lane0", "Track A", true);
+    boolean("lane1", "Track B", false);
+    boolean("lane2", "Track C", false);
+    boolean("drumMap", "Chess beat map", false);
+    boolean("chessHarmony", "Chess harmony", false);
+    boolean("chessFX", "Chess effects", false);
+    add("matrixProb", "Step probability", 0, 100, 100);
+    l.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"matrixRatchet", 1}, "Ratchets", 1, 4, 1));
+    add("matrixSwing", "Swing", 0, 75, 0);
     const char *names[] = {"Pawn", "Knight", "Bishop", "Rook", "Queen", "King"};
     for (int p = 0; p < 6; ++p)
     {
@@ -170,29 +188,31 @@ bool CheckmateProcessor::audition(int square, int signedPiece, int action)
     return true;
 }
 void CheckmateProcessor::generated(int note, int piece, float velocity, int offset, juce::MidiBuffer &out,
-                                   int delaySamples)
+                                   int delaySamples, int gateSamples, int synthNote)
 {
     if (delaySamples > 0)
     {
         for (auto &f : future)
             if (!f.when)
             {
-                f = {audioClock + offset + delaySamples, note, piece, velocity};
+                f = {audioClock + offset + delaySamples, note, piece, velocity, gateSamples, synthNote};
                 return;
             }
         return;
     }
-    synth.start(note, piece + 1, piece, velocity);
+    const auto *bank = sampleData.load(std::memory_order_acquire);
+    const auto *sample = bank != nullptr ? bank->pieces[size_t(piece)] : nullptr;
+    synth.start(synthNote >= 0 ? synthNote : note, piece + 1, piece, velocity, 0, false, 0, sample, gateSamples);
     if (value("midiOut") > .5f)
     {
         auto &gate = gates[piece][note];
         if (gate > 0)
             out.addEvent(juce::MidiMessage::noteOff(piece + 1, note), offset);
         out.addEvent(juce::MidiMessage::noteOn(piece + 1, note, velocity), offset);
-        gate = audioClock + offset + std::max(1, int(synth.rate * .18));
+        gate = audioClock + offset + std::max(1, gateSamples > 0 ? gateSamples : int(synth.rate * .18));
     }
 }
-void CheckmateProcessor::trigger(int square, int signedPiece, int action, int offset, juce::MidiBuffer &out)
+void CheckmateProcessor::trigger(int square, int signedPiece, int action, int offset, juce::MidiBuffer &out, int delaySamples)
 {
     if (square < 0 || square >= 64 || signedPiece == 0 || std::abs(signedPiece) > 6)
         return;
@@ -201,17 +221,39 @@ void CheckmateProcessor::trigger(int square, int signedPiece, int action, int of
                                      int(value("octave")), synth.settings.pieces);
     float velocity = juce::jlimit(
         .16f, 1.f, 90.f / 127 * synth.settings.pieces[piece].velocity * (action == 1 ? 1.2f : 1.f));
-    generated(note, piece, velocity, offset, out);
+    generated(note, piece, velocity, offset, out, delaySamples);
     // Piece personalities: knight fifth, bishop overtone, king foundation triad.
     if (piece == 1)
-        generated(std::min(127, note + 7), piece, velocity * .65f, offset, out, int(synth.rate * .065));
+        generated(std::min(127, note + 7), piece, velocity * .65f, offset, out, delaySamples + int(synth.rate * .065));
     if (piece == 5)
     {
-        generated(std::min(127, note + 4), piece, velocity * .6f, offset, out);
-        generated(std::min(127, note + 7), piece, velocity * .6f, offset, out);
+        generated(std::min(127, note + 4), piece, velocity * .6f, offset, out, delaySamples);
+        generated(std::min(127, note + 7), piece, velocity * .6f, offset, out, delaySamples);
     }
     if (action >= 2)
-        generated(std::min(127, note + 12), piece, velocity * .6f, offset, out);
+        generated(std::min(127, note + 12), piece, velocity * .6f, offset, out, delaySamples);
+}
+void CheckmateProcessor::triggerGame(const checkmate::MusicalMove &m, int offset, juce::MidiBuffer &out,
+                                     bool drums, double playbackBpm, int delaySamples)
+{
+    if (m.piece == 0 || m.square < 0 || m.square >= 64) return;
+    int p = std::abs(m.piece) - 1;
+    int note = checkmate::moveNote(m, int(value("root")), int(value("scale")), int(value("octave")),
+                                     synth.settings.pieces, drums);
+    tension.store(m.tension, std::memory_order_relaxed);
+    synth.settings.tension = m.tension;
+    const auto *bank = sampleData.load(std::memory_order_acquire);
+    const int sampleKey = drums && bank && bank->pieces[size_t(p)] != nullptr ? 60 : -1;
+    const float velocity = juce::jlimit(.01f, 1.f, m.velocity / 127.f * synth.settings.pieces[p].velocity);
+    const int gate = std::max(1, int(synth.rate * (60. / std::max(30., playbackBpm)) *
+                                 std::pow(.5, int(value("division"))) * m.duration / 100.));
+    generated(note, p, velocity, offset, out, delaySamples, gate, sampleKey);
+    if (value("chessHarmony") > .5f && !drums && m.action >= 1)
+    {
+        generated(std::min(127, note + (m.tension > .65f ? 3 : 4)), p, velocity * .55f,
+                  offset, out, delaySamples, gate);
+        generated(std::min(127, note + 7), p, velocity * .55f, offset, out, delaySamples, gate);
+    }
 }
 void CheckmateProcessor::stopGenerated(int offset, juce::MidiBuffer &out)
 {
@@ -229,9 +271,16 @@ void CheckmateProcessor::stopGenerated(int offset, juce::MidiBuffer &out)
 void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuffer &midi)
 {
     juce::ScopedNoDenormals guard;
+    gameReaders.fetch_add(1, std::memory_order_seq_cst);
     buffer.clear();
     output.clear();
     synth.settings = currentSettings();
+    if (value("chessFX") > .5f)
+    {
+        auto t = juce::jlimit(0.f, 1.f, tension.load());
+        synth.settings.drive = std::min(1.f, synth.settings.drive + t * .16f);
+        synth.settings.delay = std::min(1.f, synth.settings.delay + t * .12f);
+    }
     blockSamples = buffer.getNumSamples();
     int a, n, b, m;
     fifo.prepareToRead(fifo.getNumReady(), a, n, b, m);
@@ -311,7 +360,7 @@ void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mi
             for (auto &f : future)
                 if (f.when > 0 && f.when <= audioClock + s)
                 {
-                    generated(f.note, f.piece, f.velocity, s, output);
+                    generated(f.note, f.piece, f.velocity, s, output, 0, f.gateSamples, f.synthNote);
                     f.when = 0;
                 }
             findOff();
@@ -330,7 +379,9 @@ void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mi
                 int p = int(value("midiPiece"));
                 if (p == 6)
                     p = (channel - 1) % 6;
-                synth.start(msg.getNoteNumber(), channel, p, msg.getFloatVelocity(), 0, true);
+                const auto *bank = sampleData.load(std::memory_order_acquire);
+                const auto *sample = bank ? bank->pieces[size_t(p)] : nullptr;
+                synth.start(msg.getNoteNumber(), channel, p, msg.getFloatVelocity(), 0, true, 0, sample);
             }
             else if (msg.isNoteOff())
                 synth.off(msg.getNoteNumber(), channel);
@@ -347,8 +398,33 @@ void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mi
                 lastStep = step;
                 int col = int((step % 8 + 8) % 8);
                 activeColumn = col;
+                const int swingSamples = (step & 1) ? int(synth.rate * 60. / bpm * stepBeats *
+                                                              value("matrixSwing") * .005) : 0;
+                const int ratchets = juce::jlimit(1, 4, int(value("matrixRatchet")));
+                const double probability = value("matrixProb") / 100.;
                 for (int r = 0; r < 8; ++r)
-                    trigger(r * 8 + col, matrix[r * 8 + col].load(), 0, s, output);
+                {
+                    const int cell = r * 8 + col;
+                    const int piece = matrix[size_t(cell)].load();
+                    if (!piece) continue;
+                    if (!checkmate::stepPassesProbability(step, cell, probability)) continue;
+                    for (int repeat = 0; repeat < ratchets; ++repeat)
+                    {
+                        int delay = swingSamples + int(repeat * stepBeats * 60. / bpm * synth.rate / ratchets);
+                        trigger(cell, piece, 0, s, output, delay);
+                    }
+                }
+                const auto *games = gameData.load(std::memory_order_seq_cst);
+                if (value("gamePlayback") > .5f && games != nullptr)
+                    for (int lane = 0; lane < 3; ++lane)
+                    {
+                        if (laneParameters[size_t(lane)]->load() < .5f) continue;
+                        const auto &moves = games->tracks[size_t(lane)].moves;
+                        if (moves.empty()) continue;
+                        auto pos = size_t((step % int64_t(moves.size()) + int64_t(moves.size())) %
+                                          int64_t(moves.size()));
+                        triggerGame(moves[pos], s, output, value("drumMap") > .5f, bpm, swingSamples);
+                    }
                 findOff();
             }
             if (!sync)
@@ -370,6 +446,7 @@ void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mi
     wasHostPlaying = hostPlaying;
     peak = blockPeak;
     midi.swapWith(output);
+    gameReaders.fetch_sub(1, std::memory_order_seq_cst);
 }
 juce::ValueTree CheckmateProcessor::sessionCopy() const
 {
@@ -391,6 +468,41 @@ void CheckmateProcessor::getStateInformation(juce::MemoryBlock &data)
     while (tree.getChildWithName("SESSION").isValid())
         tree.removeChild(tree.getChildWithName("SESSION"), nullptr);
     tree.addChild(sessionCopy(), -1, nullptr);
+    auto games = gameSnapshot();
+    juce::ValueTree gameTree("GAMEBANK");
+    for (int trackIndex = 0; trackIndex < 3; ++trackIndex)
+    {
+        auto &game = games.tracks[size_t(trackIndex)];
+        juce::ValueTree track("TRACK");
+        track.setProperty("name", juce::String(game.name), nullptr);
+        for (const auto &m : game.moves)
+        {
+            juce::ValueTree note("MOVE");
+            note.setProperty("from", m.move.from, nullptr);
+            note.setProperty("to", m.move.to, nullptr);
+            note.setProperty("square", m.square, nullptr);
+            note.setProperty("piece", m.piece, nullptr);
+            note.setProperty("action", m.action, nullptr);
+            note.setProperty("note", m.note, nullptr);
+            note.setProperty("velocity", m.velocity, nullptr);
+            note.setProperty("duration", m.duration, nullptr);
+            note.setProperty("tension", m.tension, nullptr);
+            note.setProperty("san", juce::String(m.san), nullptr);
+            track.addChild(note, -1, nullptr);
+        }
+        gameTree.addChild(track, -1, nullptr);
+    }
+    tree.addChild(gameTree, -1, nullptr);
+    juce::String matrixBanks;
+    {
+        const juce::ScopedLock lock(dataLock);
+        for (const auto &slot : matrixSlots)
+            for (auto cell : slot) matrixBanks += juce::String(cell) + ",";
+    }
+    tree.setProperty("matrixBanks", matrixBanks, nullptr);
+    auto paths = pieceSamplePaths();
+    for (int p = 0; p < 6; ++p)
+        tree.setProperty("samplePath" + juce::String(p), paths[size_t(p)], nullptr);
     if (auto xml = tree.createXml())
         copyXmlToBinary(*xml, data);
 }
@@ -406,13 +518,68 @@ void CheckmateProcessor::setStateInformation(const void *data, int bytes)
                     matrix[i] = juce::jlimit(-6, 6, cells[i].getIntValue());
             if (auto s = tree.getChildWithName("SESSION"); s.isValid())
                 setSession(s);
+            GameBank bank;
+            auto gameTree = tree.getChildWithName("GAMEBANK");
+            if (gameTree.isValid())
+                for (int lane = 0; lane < std::min(3, gameTree.getNumChildren()); ++lane)
+                {
+                    auto track = gameTree.getChild(lane);
+                    auto &game = bank.tracks[size_t(lane)];
+                    game.name = track.getProperty("name").toString().toStdString();
+                    for (int index = 0; index < std::min(4096, track.getNumChildren()); ++index)
+                    {
+                        auto move = track.getChild(index);
+                        checkmate::MusicalMove m;
+                        m.move = {int(move.getProperty("from", 0)), int(move.getProperty("to", 0))};
+                        m.square = int(move.getProperty("square", 0));
+                        m.piece = int(move.getProperty("piece", 0));
+                        m.action = juce::jlimit(0, 3, int(move.getProperty("action", 0)));
+                        m.note = juce::jlimit(-1, 127, int(move.getProperty("note", -1)));
+                        m.velocity = juce::jlimit(1, 127, int(move.getProperty("velocity", 90)));
+                        m.duration = juce::jlimit(10, 100, int(move.getProperty("duration", 80)));
+                        m.tension = juce::jlimit(.1f, 1.f, float(move.getProperty("tension", .25f)));
+                        m.san = move.getProperty("san").toString().toStdString();
+                        if (m.square >= 0 && m.square < 64 && m.piece != 0 && std::abs(m.piece) <= 6)
+                            game.moves.push_back(std::move(m));
+                    }
+                }
+            publishGames(std::move(bank));
+            auto banks = juce::StringArray::fromTokens(tree.getProperty("matrixBanks").toString(), ",", "");
+            if (banks.size() >= 16 * 64)
+            {
+                const juce::ScopedLock lock(dataLock);
+                for (int slot = 0; slot < 16; ++slot)
+                    for (int cell = 0; cell < 64; ++cell)
+                        matrixSlots[size_t(slot)][size_t(cell)] =
+                            juce::jlimit(-6, 6, banks[slot * 64 + cell].getIntValue());
+            }
+            std::array<juce::String, 6> paths;
+            for (int p = 0; p < 6; ++p)
+                paths[size_t(p)] = tree.getProperty("samplePath" + juce::String(p)).toString();
+            for (int p = 0; p < 6; ++p)
+                clearPieceSample(p);
+            // Keep the saved location when a sample has moved or is temporarily unavailable.
+            for (int p = 0; p < 6; ++p)
+            {
+                if (paths[size_t(p)].isEmpty()) continue;
+                juce::String error;
+                if (!loadPieceSample(p, juce::File(paths[size_t(p)]), error))
+                {
+                    const juce::ScopedLock lock(dataLock);
+                    samplePaths[size_t(p)] = paths[size_t(p)];
+                }
+            }
             // Reopening a project never starts the free-running sequencer unexpectedly.
             tree.setProperty("run", 0, nullptr);
             for (auto child : tree)
                 if (child["id"].toString() == "run")
                     child.setProperty("value", 0, nullptr);
             tree.removeChild(tree.getChildWithName("SESSION"), nullptr);
+            tree.removeChild(tree.getChildWithName("GAMEBANK"), nullptr);
             tree.removeProperty("matrix", nullptr);
+            tree.removeProperty("matrixBanks", nullptr);
+            for (int p = 0; p < 6; ++p)
+                tree.removeProperty("samplePath" + juce::String(p), nullptr);
             parameters.replaceState(tree);
             panicRequested = true;
             ++stateRevision;
@@ -477,6 +644,9 @@ juce::MidiFile CheckmateProcessor::matrixMidi() const
     juce::MidiMessageSequence seq;
     const auto cfg = currentSettings();
     double step = std::pow(.5, int(value("division"))) * 960;
+    const int ratchets = juce::jlimit(1, 4, int(value("matrixRatchet")));
+    const double swing = value("matrixSwing") * .005 * step;
+    const double probability = value("matrixProb") / 100.;
     auto tempo = juce::MidiMessage::tempoMetaEvent(int(60000000 / value("bpm")));
     tempo.setTimeStamp(0);
     seq.addEvent(tempo);
@@ -484,18 +654,24 @@ juce::MidiFile CheckmateProcessor::matrixMidi() const
         for (int row = 0; row < 8; ++row)
         {
             int p = std::abs(matrix[row * 8 + col].load()) - 1;
-            if (p < 0)
+            if (p < 0 || !checkmate::stepPassesProbability(col, row * 8 + col, probability))
                 continue;
             int note = checkmate::squareNote(row * 8 + col, p, int(value("root")), int(value("scale")),
                                              int(value("octave")), cfg.pieces);
             auto add = [&](int key, float vel, double delay = 0)
             {
-                auto on = juce::MidiMessage::noteOn(p + 1, key, vel);
-                on.setTimeStamp(col * step + delay);
-                seq.addEvent(on);
-                auto off = juce::MidiMessage::noteOff(p + 1, key);
-                off.setTimeStamp(col * step + delay + std::min(step * .8, 960 * value("bpm") * .18 / 60));
-                seq.addEvent(off);
+                for (int repeat = 0; repeat < ratchets; ++repeat)
+                {
+                    const double when = col * step + (col & 1 ? swing : 0.) +
+                                        repeat * step / ratchets + delay;
+                    auto on = juce::MidiMessage::noteOn(p + 1, key, vel);
+                    on.setTimeStamp(when);
+                    seq.addEvent(on);
+                    auto off = juce::MidiMessage::noteOff(p + 1, key);
+                    off.setTimeStamp(when + std::min(step * .8 / ratchets,
+                                                    960 * value("bpm") * .18 / 60));
+                    seq.addEvent(off);
+                }
             };
             float velocity = juce::jlimit(.16f, 1.f, 90.f / 127 * cfg.pieces[p].velocity);
             add(note, velocity);
@@ -516,6 +692,175 @@ juce::MidiFile CheckmateProcessor::matrixMidi() const
     file.addTrack(seq);
     return file;
 }
+CheckmateProcessor::GameBank CheckmateProcessor::gameSnapshot() const
+{
+    gameReaders.fetch_add(1, std::memory_order_seq_cst);
+    const auto *bank = gameData.load(std::memory_order_seq_cst);
+    auto copy = bank ? *bank : GameBank{};
+    gameReaders.fetch_sub(1, std::memory_order_seq_cst);
+    return copy;
+}
+void CheckmateProcessor::publishGames(GameBank updated)
+{
+    for (auto &track : updated.tracks)
+    {
+        if (track.name.size() > 200) track.name.resize(200);
+        if (track.moves.size() > 4096) track.moves.resize(4096);
+        for (auto &m : track.moves)
+        {
+            m.note = juce::jlimit(-1, 127, m.note);
+            m.velocity = juce::jlimit(1, 127, m.velocity);
+            m.duration = juce::jlimit(10, 100, m.duration);
+            m.tension = juce::jlimit(.1f, 1.f, m.tension);
+        }
+    }
+    auto bank = std::make_unique<GameBank>(std::move(updated));
+    const juce::ScopedLock lock(dataLock);
+    const auto *current = bank.get();
+    gameVersions.push_back(std::move(bank));
+    gameData.store(current, std::memory_order_seq_cst);
+    if (gameReaders.load(std::memory_order_seq_cst) == 0 && gameVersions.size() > 2)
+    {
+        gameVersions.erase(std::remove_if(gameVersions.begin(), gameVersions.end(),
+            [current](const std::unique_ptr<GameBank> &p) { return p.get() != current; }),
+            gameVersions.end());
+    }
+}
+void CheckmateProcessor::saveMatrixSlot(int slot)
+{
+    if (slot < 0 || slot >= 16) return;
+    const juce::ScopedLock lock(dataLock);
+    for (int cell = 0; cell < 64; ++cell) matrixSlots[size_t(slot)][size_t(cell)] = matrix[size_t(cell)].load();
+}
+void CheckmateProcessor::loadMatrixSlot(int slot)
+{
+    if (slot < 0 || slot >= 16) return;
+    const juce::ScopedLock lock(dataLock);
+    for (int cell = 0; cell < 64; ++cell) matrix[size_t(cell)] = matrixSlots[size_t(slot)][size_t(cell)];
+}
+std::array<juce::String, 6> CheckmateProcessor::pieceSamplePaths() const
+{
+    const juce::ScopedLock lock(dataLock);
+    return samplePaths;
+}
+bool CheckmateProcessor::loadPieceSample(int piece, const juce::File &file, juce::String &error)
+{
+    if (piece < 0 || piece >= 6) { error = "Invalid piece"; return false; }
+    if (!file.existsAsFile() || file.getSize() > 96 * 1024 * 1024)
+    {
+        error = "Sample file missing or exceeds 96 MB";
+        return false;
+    }
+    juce::AudioFormatManager manager;
+    manager.registerBasicFormats();
+    auto reader = std::unique_ptr<juce::AudioFormatReader>(manager.createReaderFor(file));
+    if (!reader || reader->sampleRate <= 1000 || reader->numChannels < 1 || reader->numChannels > 8 ||
+        reader->lengthInSamples < 2 || reader->lengthInSamples > 12 * reader->sampleRate ||
+        reader->lengthInSamples > 2 * 1024 * 1024 || reader->sampleRate > 384000)
+    {
+        error = "Load an audio sample between 2 frames and 12 seconds";
+        return false;
+    }
+    const int length = int(reader->lengthInSamples);
+    juce::AudioBuffer<float> buffer(2, length);
+    buffer.clear();
+    if (!reader->read(&buffer, 0, length, 0, true, reader->numChannels > 1))
+    {
+        error = "Sample decoder failed";
+        return false;
+    }
+    auto data = std::make_unique<checkmate::SampleData>();
+    data->sampleRate = reader->sampleRate;
+    data->left.assign(buffer.getReadPointer(0), buffer.getReadPointer(0) + length);
+    data->right.assign(buffer.getReadPointer(reader->numChannels > 1 ? 1 : 0),
+                       buffer.getReadPointer(reader->numChannels > 1 ? 1 : 0) + length);
+    if (!data->valid()) { error = "Invalid sample"; return false; }
+    for (auto *channel : {&data->left, &data->right})
+        for (auto &sample : *channel)
+            sample = std::isfinite(sample) ? juce::jlimit(-1.f, 1.f, sample) : 0.f;
+    // All previously published buffers remain alive until processor teardown.
+    const juce::ScopedLock lock(dataLock);
+    auto bank = std::make_unique<SampleBank>(*sampleData.load(std::memory_order_acquire));
+    bank->pieces[size_t(piece)] = data.get();
+    sampleStorage.push_back(std::move(data));
+    samplePaths[size_t(piece)] = file.getFullPathName();
+    sampleData.store(bank.get(), std::memory_order_release);
+    sampleVersions.push_back(std::move(bank));
+    error.clear();
+    return true;
+}
+void CheckmateProcessor::clearPieceSample(int piece)
+{
+    if (piece < 0 || piece >= 6) return;
+    const juce::ScopedLock lock(dataLock);
+    auto bank = std::make_unique<SampleBank>(*sampleData.load(std::memory_order_acquire));
+    bank->pieces[size_t(piece)] = nullptr;
+    samplePaths[size_t(piece)].clear();
+    sampleData.store(bank.get(), std::memory_order_release);
+    sampleVersions.push_back(std::move(bank));
+}
+void CheckmateProcessor::reloadSamplePaths()
+{
+    auto paths = pieceSamplePaths();
+    for (int p = 0; p < 6; ++p)
+    {
+        if (paths[size_t(p)].isEmpty()) continue;
+        juce::String error;
+        loadPieceSample(p, juce::File(paths[size_t(p)]), error);
+    }
+}
+juce::MidiFile CheckmateProcessor::gameMidi() const
+{
+    juce::MidiFile file;
+    file.setTicksPerQuarterNote(960);
+    auto games = gameSnapshot();
+    auto cfg = currentSettings();
+    const double beatTicks = 960 * std::pow(.5, int(value("division")));
+    const bool drums = value("drumMap") > .5f;
+    const bool harmony = value("chessHarmony") > .5f;
+    for (int lane = 0; lane < 3; ++lane)
+    {
+        const auto &moves = games.tracks[size_t(lane)].moves;
+        if (moves.empty() || laneParameters[size_t(lane)]->load() < .5f) continue;
+        juce::MidiMessageSequence seq;
+        auto tempo = juce::MidiMessage::tempoMetaEvent(int(60000000 / value("bpm")));
+        tempo.setTimeStamp(0);
+        seq.addEvent(tempo);
+        for (size_t i = 0; i < moves.size(); ++i)
+        {
+            const auto &m = moves[i];
+            if (m.piece == 0) continue;
+            int p = std::abs(m.piece) - 1;
+            const int note = checkmate::moveNote(m, int(value("root")), int(value("scale")),
+                                                  int(value("octave")), cfg.pieces, drums);
+            const double start = double(i) * beatTicks;
+            const double end = start + beatTicks * m.duration / 100.;
+            const auto add = [&](int key, float weight)
+            {
+                auto on = juce::MidiMessage::noteOn(p + 1, key,
+                        juce::jlimit(.01f, 1.f, m.velocity / 127.f * weight));
+                on.setTimeStamp(start);
+                seq.addEvent(on);
+                auto off = juce::MidiMessage::noteOff(p + 1, key);
+                off.setTimeStamp(end);
+                seq.addEvent(off);
+            };
+            add(note, cfg.pieces[p].velocity);
+            if (harmony && !drums && m.action >= 1)
+            {
+                add(std::min(127, note + (m.tension > .65f ? 3 : 4)), .55f);
+                add(std::min(127, note + 7), .55f);
+            }
+        }
+        auto end = juce::MidiMessage::endOfTrack();
+        end.setTimeStamp(std::max(beatTicks * moves.size(), seq.getEndTime() + 1.));
+        seq.addEvent(end);
+        seq.updateMatchedPairs();
+        file.addTrack(seq);
+    }
+    return file;
+}
+
 juce::AudioProcessorEditor *CheckmateProcessor::createEditor()
 {
     return new CheckmateEditor(*this);

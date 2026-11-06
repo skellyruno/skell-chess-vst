@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cctype>
 #include <cmath>
 #include <string>
@@ -288,7 +289,7 @@ struct Chess
             }
         return std::clamp(pressure * .08f + center * .075f + (32 - pieces) * .015f, .1f, 1.f);
     }
-    Move bot() const
+    Move bot(int style = 0) const
     {
         auto moves = legal();
         Move best;
@@ -309,7 +310,18 @@ struct Chess
                 worst = std::max(worst, values[std::abs(n.board[reply.to])]);
             v -= worst;
             if (n.check(n.turn))
-                v += 50;
+                v += style == 1 ? 180 : 50;
+            if (style == 1) // Aggressive: prefer trades/captures, pressure and checks.
+                v += values[std::abs(board[m.to])] * 2 +
+                     (n.attacked(m.to, n.turn) ? -60 : 70);
+            if (style == 2) // Defensive: protect the moved piece, avoid exposure.
+                v += n.attacked(m.to, n.turn) ? -values[std::abs(board[m.from])] : 120;
+            if (style == 3) // Experimental: deterministic unusual moves, reproducible on reload.
+            {
+                const uint32_t hash = uint32_t(m.from * 6721 + m.to * 31337 +
+                                              int(n.tension() * 1000) * 7919);
+                v += int((hash ^ (hash >> 7)) % 1100) - 550;
+            }
             if (n.legal().empty() && n.check(n.turn))
                 v += 100000;
             if (v > score)

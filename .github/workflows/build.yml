@@ -1,24 +1,32 @@
-name: Build Windows VST3
+name: Checkmate Windows VST3 and Standalone
 on:
   workflow_dispatch:
-
+  push:
+  pull_request:
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -A x64 -DBUILD_TESTING=ON
       - name: Build
         run: cmake --build build --config Release --parallel 2
-      - name: Package
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package VST3 and Standalone
         shell: pwsh
         run: |
-          $plugin = Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3' | Select-Object -First 1
-          if (-not $plugin) { throw 'VST3 bundle missing' }
-          Compress-Archive -Path $plugin.FullName -DestinationPath SkellPlugin-Windows-VST3.zip
+          $vst = 'build/Checkmate_artefacts/Release/VST3/Checkmate.vst3'
+          $exe = 'build/Checkmate_artefacts/Release/Standalone/Checkmate.exe'
+          if (!(Test-Path $vst) -or !(Test-Path $exe)) { throw 'Build outputs missing' }
+          New-Item -ItemType Directory -Path package -Force | Out-Null
+          Copy-Item $vst package -Recurse
+          Copy-Item $exe package
+          Copy-Item README.md package
+          Compress-Archive -Path package/* -DestinationPath Checkmate-Windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: SkellPlugin-Windows-VST3
-          path: SkellPlugin-Windows-VST3.zip
+          name: Checkmate-Windows-x64
+          path: Checkmate-Windows-x64.zip
           if-no-files-found: error

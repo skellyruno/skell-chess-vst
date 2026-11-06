@@ -152,6 +152,27 @@ int main()
             for (auto v : synth.voices)
                 require(!v.active, "MIDI note-off releases voice");
         }
+        // One-shot sample mode must remain finite and allocation-free in render().
+        SampleData loaded;
+        loaded.sampleRate = 48000;
+        loaded.left.assign(4800, .8f);
+        loaded.right.assign(4800, -.8f);
+        Synth sampler;
+        sampler.prepare(48000);
+        sampler.start(60, 1, 0, .9f, 0, false, 0, &loaded);
+        double sampledEnergy = 0;
+        watchAlloc = true;
+        for (int i = 0; i < 12000; ++i)
+        {
+            float l = 0, r = 0;
+            sampler.render(l, r);
+            sampledEnergy += l * l + r * r;
+            if (!std::isfinite(l) || !std::isfinite(r)) { watchAlloc = false; throw std::runtime_error("sample finite"); }
+        }
+        watchAlloc = false;
+        require(sampledEnergy > 0, "custom sample produces audio");
+        require(allocs == 0, "sample playback no allocations");
+        for (auto v : sampler.voices) require(!v.active, "sample terminates at buffer end");
         Synth stress;
         stress.prepare(48000);
         std::mt19937 rng(17);
