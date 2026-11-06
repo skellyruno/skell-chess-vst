@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <initializer_list>
 namespace
 {
 const juce::Colour bg{0xff090c12}, panel{0xff121823}, border{0xff293341}, gold{0xffeac27b}, muted{0xff8e9bad},
@@ -36,8 +37,8 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     look.setColour(juce::TextButton::buttonOnColourId, gold.darker(.5f));
     look.setColour(juce::TextButton::textColourOffId, white);
     setLookAndFeel(&look);
-    const char *tabNames[] = {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE"};
-    for (int i = 0; i < 4; ++i)
+    const char *tabNames[] = {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE", "GAME LAB", "SAMPLES"};
+    for (int i = 0; i < 6; ++i)
     {
         addAndMakeVisible(tabs[i]);
         tabs[i].setButtonText(tabNames[i]);
@@ -131,12 +132,112 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
         archivePlaying = false;
     };
     exportMidi.onClick = [this] { exportMatrix(); };
+    for (auto *b : {&importGame, &exportGame, &captureMatch, &loadArchiveGame, &sampleLoad,
+                    &sampleClear, &savePack, &openPack, &saveSlot, &loadSlot})
+        addAndMakeVisible(*b);
+    for (auto *c : {&botStyle, &samplePiece, &gameLane, &matrixSlot})
+        addAndMakeVisible(*c);
+    for (auto *t : {&gamePlayback, &drumMap, &harmony, &chessFX})
+        addAndMakeVisible(*t);
+    for (int i = 0; i < 3; ++i)
+    {
+        laneOn[size_t(i)].setButtonText(juce::String::charToString(char('A' + i)));
+        addAndMakeVisible(laneOn[size_t(i)]);
+        laneAttach[size_t(i)] = std::make_unique<BA>(proc.parameters, "lane" + juce::String(i), laneOn[size_t(i)]);
+    }
+    botStyle.addItemList({"Balanced", "Aggressive", "Defensive", "Experimental"}, 1);
+    botStyleAttach = std::make_unique<CA>(proc.parameters, "botStyle", botStyle);
+    for (int i = 0; i < 6; ++i) samplePiece.addItem(pieceNames[i], i + 1);
+    samplePiece.setSelectedId(1, juce::dontSendNotification);
+    for (int i = 0; i < 3; ++i)
+        gameLane.addItem("TRACK " + juce::String::charToString(char('A' + i)), i + 1);
+    gameLane.setSelectedId(1, juce::dontSendNotification);
+    for (int i = 0; i < 16; ++i) matrixSlot.addItem("BANK " + juce::String(i + 1), i + 1);
+    matrixSlot.setSelectedId(1, juce::dontSendNotification);
+    gamePlaybackAttach = std::make_unique<BA>(proc.parameters, "gamePlayback", gamePlayback);
+    drumMapAttach = std::make_unique<BA>(proc.parameters, "drumMap", drumMap);
+    harmonyAttach = std::make_unique<BA>(proc.parameters, "chessHarmony", harmony);
+    chessFXAttach = std::make_unique<BA>(proc.parameters, "chessFX", chessFX);
+    for (auto *slider : {&noteEditor, &velocityEditor, &durationEditor, &matrixProbability,
+                         &matrixRatchet, &matrixSwing})
+    {
+        addAndMakeVisible(*slider);
+        slider->setSliderStyle(juce::Slider::LinearHorizontal);
+        slider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 62, 22);
+        slider->setColour(juce::Slider::trackColourId, gold);
+        slider->setColour(juce::Slider::backgroundColourId, panel);
+    }
+    noteEditor.setRange(0, 128, 1); // 0 = automatic; other values are MIDI note + 1.
+    velocityEditor.setRange(1, 127, 1);
+    durationEditor.setRange(10, 100, 1);
+    probabilityAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        proc.parameters, "matrixProb", matrixProbability);
+    ratchetAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        proc.parameters, "matrixRatchet", matrixRatchet);
+    swingAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        proc.parameters, "matrixSwing", matrixSwing);
+    for (auto *label : {&gameInfo, &sampleInfo, &editInfo})
+    {
+        addAndMakeVisible(*label);
+        label->setColour(juce::Label::textColourId, white);
+        label->setFont(uiFont(13.f));
+        label->setJustificationType(juce::Justification::centredLeft);
+    }
+    movesList.setModel(this);
+    movesList.setRowHeight(27);
+    movesList.setColour(juce::ListBox::backgroundColourId, panel);
+    movesList.setColour(juce::ListBox::outlineColourId, border);
+    movesList.setOutlineThickness(1);
+    addAndMakeVisible(movesList);
+    importGame.onClick = [this] { importPgnFile(); };
+    exportGame.onClick = [this] { exportGameMidi(); };
+    captureMatch.onClick = [this] { captureCurrentMatch(); };
+    loadArchiveGame.onClick = [this] { useArchiveInGameLab(); };
+    savePack.onClick = [this] { savePresetPack(); };
+    openPack.onClick = [this] { openPresetPack(); };
+    sampleLoad.onClick = [this]
+    {
+        chooser = std::make_unique<juce::FileChooser>("Choose a WAV or AIFF sample", juce::File(),
+                                                        "*.wav;*.aif;*.aiff");
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [safe = juce::Component::SafePointer<CheckmateEditor>(this)](const juce::FileChooser &c)
+            {
+                if (!safe || c.getResult() == juce::File()) return;
+                juce::String error;
+                const bool ok = safe->proc.loadPieceSample(safe->samplePiece.getSelectedId() - 1,
+                                                            c.getResult(), error);
+                if (ok) safe->refreshSampleInfo();
+                else safe->sampleInfo.setText(error, juce::dontSendNotification);
+            });
+    };
+    sampleClear.onClick = [this]
+    {
+        proc.clearPieceSample(samplePiece.getSelectedId() - 1);
+        refreshSampleInfo();
+    };
+    samplePiece.onChange = [this] { refreshSampleInfo(); };
+    gameLane.onChange = [this] { selectedMove = -1; refreshGameList(); };
+    noteEditor.onValueChange = [this] { editSelectedMove(); };
+    velocityEditor.onValueChange = [this] { editSelectedMove(); };
+    durationEditor.onValueChange = [this] { editSelectedMove(); };
+    saveSlot.onClick = [this]
+    {
+        proc.saveMatrixSlot(matrixSlot.getSelectedId() - 1);
+        status = "Saved matrix bank " + juce::String(matrixSlot.getSelectedId());
+        repaint();
+    };
+    loadSlot.onClick = [this]
+    {
+        proc.loadMatrixSlot(matrixSlot.getSelectedId() - 1);
+        status = "Loaded matrix bank " + juce::String(matrixSlot.getSelectedId());
+        repaint();
+    };
     restore();
     revision = proc.stateRevision.load();
     setResizable(true, true);
     setResizeLimits(810, 540, 1620, 1080);
     getConstrainer()->setFixedAspectRatio(1.5);
-    setSize(1080, 720);
+    setSize(945, 630);
     startTimerHz(30);
 }
 CheckmateEditor::~CheckmateEditor()
@@ -152,7 +253,7 @@ void CheckmateEditor::showTab(int t)
     tab = t;
     selected = -1;
     archivePlaying = false;
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 6; ++i)
         tabs[i].setToggleState(i == tab, juce::dontSendNotification);
     buildDials();
     resized();
@@ -212,20 +313,22 @@ void CheckmateEditor::buildDials()
 }
 void CheckmateEditor::resized()
 {
-    float sx = getWidth() / 1080.f, sy = getHeight() / 720.f;
+    const float sx = getWidth() / 1080.f, sy = getHeight() / 720.f;
     auto bounds = [&](juce::Component &c, int x, int y, int w, int h)
     {
         c.setBounds(juce::roundToInt(x * sx), juce::roundToInt(y * sy), juce::roundToInt(w * sx),
                     juce::roundToInt(h * sy));
     };
-    for (int i = 0; i < 4; ++i)
-        bounds(tabs[i], 298 + i * 122, 21, 114, 30);
-    bounds(preset, 810, 21, 242, 30);
+    for (int i = 0; i < 6; ++i)
+        bounds(tabs[size_t(i)], 264 + i * 99, 21, 94, 30);
+    bounds(preset, 861, 21, 191, 30);
     bounds(root, 28, 83, 72, 30);
-    bounds(scale, 110, 83, 220, 30);
-    bounds(sync, 350, 83, 110, 30);
-    bounds(midiOut, 465, 83, 110, 30);
-    bounds(coupling, 580, 83, 110, 30);
+    bounds(scale, 110, 83, 216, 30);
+    bounds(sync, 344, 83, 109, 30);
+    bounds(midiOut, 455, 83, 102, 30);
+    bounds(coupling, 564, 83, 114, 30);
+    bounds(chessFX, 686, 83, 104, 30);
+    bounds(harmony, 793, 83, 112, 30);
     bounds(panic, 949, 83, 103, 30);
     bounds(play, 594, 158, 142, 38);
     bounds(division, 748, 158, 90, 38);
@@ -233,54 +336,97 @@ void CheckmateEditor::resized()
     bounds(pattern, 594, 210, 260, 30);
     bounds(reset, 868, 210, 184, 30);
     bounds(bot, 594, 254, 160, 30);
-    bounds(flip, 868, 254, 184, 30);
+    bounds(botStyle, 762, 254, 173, 30);
+    bounds(flip, 943, 254, 109, 30);
     bounds(archive, 594, 320, 458, 32);
     bounds(step, 594, 364, 220, 34);
     bounds(replay, 828, 364, 224, 34);
     bounds(voice, 28, 471, 200, 32);
     bounds(wave, 244, 471, 200, 32);
     bounds(midiVoice, 774, 471, 278, 32);
-    reset.setButtonText(tab == 1 ? "CLEAR MATRIX" : "NEW MATCH");
-    bool lab = tab == 2;
-    play.setVisible(!lab);
-    division.setVisible(!lab);
-    exportMidi.setVisible(!lab);
-    pattern.setVisible(tab == 1);
-    reset.setVisible(!lab);
+    const bool lab = tab == 2, matrixPage = tab == 1, gamePage = tab == 4,
+               samplePage = tab == 5;
+    reset.setButtonText(matrixPage ? "CLEAR MATRIX" : "NEW MATCH");
+    play.setVisible(tab == 0 || matrixPage || tab == 3 || gamePage);
+    if (gamePage) bounds(play, 594, 308, 218, 36);
+    division.setVisible(!lab && !samplePage);
+    if (gamePage) bounds(division, 828, 308, 224, 36);
+    exportMidi.setVisible(tab == 0 || matrixPage || tab == 3);
+    pattern.setVisible(matrixPage);
+    reset.setVisible(tab == 0 || matrixPage || tab == 3);
     bot.setVisible(tab == 0);
-    flip.setVisible(!lab && tab != 1);
+    botStyle.setVisible(tab == 0);
+    flip.setVisible(tab == 0 || tab == 3);
     archive.setVisible(tab == 3);
     step.setVisible(tab == 3);
     replay.setVisible(tab == 3);
     voice.setVisible(lab);
     wave.setVisible(lab);
     midiVoice.setVisible(lab);
+    bounds(matrixSlot, 594, 383, 120, 30);
+    bounds(saveSlot, 720, 383, 151, 30);
+    bounds(loadSlot, 878, 383, 174, 30);
+    bounds(matrixProbability, 594, 464, 155, 31);
+    bounds(matrixRatchet, 752, 464, 142, 31);
+    bounds(matrixSwing, 899, 464, 153, 31);
+    for (auto *c : std::initializer_list<juce::Component *>{&matrixSlot, &saveSlot, &loadSlot,
+                    &matrixProbability, &matrixRatchet, &matrixSwing})
+        c->setVisible(matrixPage);
+    bounds(importGame, 594, 158, 146, 36);
+    bounds(captureMatch, 746, 158, 145, 36);
+    bounds(loadArchiveGame, 897, 158, 155, 36);
+    bounds(gameLane, 594, 210, 212, 32);
+    bounds(laneOn[0], 816, 210, 68, 32);
+    bounds(laneOn[1], 887, 210, 68, 32);
+    bounds(laneOn[2], 958, 210, 87, 32);
+    bounds(gamePlayback, 594, 257, 220, 29);
+    bounds(drumMap, 816, 257, 220, 29);
+    bounds(movesList, 28, 198, 540, 468);
+    bounds(gameInfo, 28, 676, 990, 22);
+    bounds(editInfo, 594, 371, 450, 34);
+    bounds(noteEditor, 594, 411, 458, 36);
+    bounds(velocityEditor, 594, 473, 458, 36);
+    bounds(durationEditor, 594, 535, 458, 36);
+    bounds(exportGame, 594, 606, 209, 36);
+    bounds(savePack, 810, 606, 115, 36);
+    bounds(openPack, 932, 606, 120, 36);
+    for (auto *c : std::initializer_list<juce::Component *>{&importGame, &captureMatch,
+                    &loadArchiveGame, &gameLane, &gamePlayback, &drumMap, &movesList,
+                    &gameInfo, &editInfo, &noteEditor, &velocityEditor, &durationEditor,
+                    &exportGame, &savePack, &openPack})
+        c->setVisible(gamePage);
+    for (auto &enabled : laneOn) enabled.setVisible(gamePage);
+    bounds(samplePiece, 594, 190, 326, 36);
+    bounds(sampleLoad, 594, 243, 209, 38);
+    bounds(sampleClear, 818, 243, 234, 38);
+    bounds(sampleInfo, 594, 304, 458, 66);
+    samplePiece.setVisible(samplePage);
+    sampleLoad.setVisible(samplePage);
+    sampleClear.setVisible(samplePage);
+    sampleInfo.setVisible(samplePage);
     for (size_t i = 0; i < dials.size(); ++i)
     {
         int x, y, w, h;
         if (lab && i < 16)
         {
-            x = 28 + int(i % 8) * 128;
-            y = 168 + int(i / 8) * 135;
-            w = 112;
-            h = 110;
+            x = 28 + int(i % 8) * 128; y = 168 + int(i / 8) * 135;
+            w = 112; h = 110;
         }
         else if (lab)
         {
-            x = 170 + int(i - 16) * 145;
-            y = 540;
-            w = 120;
-            h = 114;
+            x = 170 + int(i - 16) * 145; y = 540;
+            w = 120; h = 114;
         }
         else
         {
             x = 594 + int(i % 4) * 116;
-            y = 481;
-            w = 108;
-            h = 124;
+            y = matrixPage ? 534 : 481;
+            w = 108; h = matrixPage ? 120 : 124;
         }
         bounds(dials[i]->label, x, y, w, 20);
         bounds(dials[i]->slider, x, y + 22, w, h - 22);
+        dials[i]->label.setVisible(!gamePage && !samplePage);
+        dials[i]->slider.setVisible(!gamePage && !samplePage);
     }
 }
 void CheckmateEditor::pieceIcon(juce::Graphics &g, int p, juce::Rectangle<float> r)
@@ -358,14 +504,18 @@ void CheckmateEditor::paint(juce::Graphics &g)
 {
     g.fillAll(bg);
     g.addTransform(juce::AffineTransform::scale(getWidth() / 1080.f, getHeight() / 720.f));
-    g.setColour(panel);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1b2330), 0, 0, panel, 1080, 68, false));
     g.fillRect(0, 0, 1080, 68);
+    g.setColour(juce::Colour(0xffc9eb85));
+    g.fillRect(0, 0, 5, 720);
     g.setColour(border);
     g.drawHorizontalLine(68, 0, 1080);
     g.drawHorizontalLine(129, 28, 1052);
     text(g, "CHECKMATE", 28, 16, 230, 28, 27, gold);
+    g.setColour(juce::Colour(0xffd0ec8b).withAlpha(.7f));
+    g.fillRoundedRectangle(29, 59, 172, 2, 1);
     text(g, "SKELL AUDIO  /  CHESS SYNTH", 29, 43, 245, 15, 10, muted);
-    if (tab != 2)
+    if (tab == 0 || tab == 1 || tab == 3)
     {
         g.setColour(panel);
         g.fillRoundedRectangle(28, 150, 540, 540, 8);
@@ -418,7 +568,11 @@ void CheckmateEditor::paint(juce::Graphics &g)
                          juce::Justification::centred);
             }
             text(g, "Click to place / right-click to erase", 594, 363, 458, 22, 13, muted);
-            text(g, "Black and white share the same musical mapping.", 594, 391, 458, 22, 12, muted);
+            text(g, "16 BANKS / PROBABILITY / RATCHET / SWING", 594, 422, 458, 22, 11, gold);
+            text(g, "PROBABILITY", 594, 448, 148, 16, 10, muted);
+            text(g, "RATCHETS", 752, 448, 134, 16, 10, muted);
+            text(g, "SWING", 899, 448, 148, 16, 10, muted);
+            text(g, status, 594, 692, 458, 16, 11, muted);
         }
         else
         {
@@ -434,17 +588,19 @@ void CheckmateEditor::paint(juce::Graphics &g)
                 text(g, status, 594, 411, 458, 28, 16);
             }
         }
-        text(g, "BOARD TENSION", 594, 445, 240, 18, 10, muted);
-        g.setColour(border);
-        g.fillRoundedRectangle(745, 450, 307, 5, 2);
-        g.setColour(gold);
-        g.fillRoundedRectangle(745, 450, 307 * proc.tension.load(), 5, 2);
-        text(g, tab == 1 ? "8 COLUMNS / POLYPHONIC SEQUENCER" : "MOVES > NOTES / SIX PIECE VOICES", 594, 631,
-             458, 20, 12, gold);
-        text(g, "MIDI channels 1-6: Pawn / Knight / Bishop / Rook / Queen / King", 594, 657, 458, 24, 11,
-             muted);
+        if (tab != 1)
+        {
+            text(g, "BOARD TENSION", 594, 445, 240, 18, 10, muted);
+            g.setColour(border);
+            g.fillRoundedRectangle(745, 450, 307, 5, 2);
+            g.setColour(gold);
+            g.fillRoundedRectangle(745, 450, 307 * proc.tension.load(), 5, 2);
+            text(g, "MOVES  >  NOTES / SIX PIECE VOICES", 594, 631, 458, 20, 12, gold);
+            text(g, "MIDI CHANNELS 1-6  /  PAWN  KNIGHT  BISHOP  ROOK  QUEEN  KING", 594, 657,
+                 458, 24, 10, muted);
+        }
     }
-    else
+    else if (tab == 2)
     {
         text(g, "SOUND LAB", 28, 144, 500, 20, 12, gold);
         g.setColour(border);
@@ -454,6 +610,49 @@ void CheckmateEditor::paint(juce::Graphics &g)
         text(g, "Shape each piece independently. Double-click any dial to restore its default.", 28, 683,
              1024, 20, 12, muted);
     }
+    else if (tab == 4)
+    {
+        g.setColour(panel);
+        g.fillRoundedRectangle(28, 149, 540, 525, 8);
+        g.fillRoundedRectangle(582, 149, 484, 520, 8);
+        text(g, "MOVE TIMELINE  /  PGN MAIN LINE", 40, 153, 510, 26, 13, gold);
+        text(g, "SELECT / EDIT / EXPORT", 594, 352, 450, 20, 13, gold);
+
+        text(g, "MIDI NOTE / 0 = AUTO", 600, 393, 250, 16, 10, muted);
+        text(g, "VELOCITY", 600, 457, 250, 17, 10, muted);
+        text(g, "DURATION  /  % OF STEP", 600, 519, 250, 17, 10, muted);
+    }
+    else if (tab == 5)
+    {
+        text(g, "CUSTOM PIECE SAMPLES", 28, 147, 500, 24, 13, gold);
+        text(g, "Select a chess piece to replace its oscillator with a WAV or AIFF one-shot.",
+             594, 150, 458, 24, 12, muted);
+        g.setColour(panel);
+        g.fillRoundedRectangle(580, 184, 486, 338, 8);
+        const auto paths = proc.pieceSamplePaths();
+        for (int i = 0; i < 6; ++i)
+        {
+            juce::Rectangle<float> r(28.f, 185.f + i * 78, 538.f, 66.f);
+            const bool selected = samplePiece.getSelectedId() == i + 1;
+            g.setColour(selected ? juce::Colour(0xff243627) : panel);
+            g.fillRoundedRectangle(r, 7);
+            g.setColour(selected ? juce::Colour(0xffd0ec8b) : border);
+            g.drawRoundedRectangle(r.reduced(.5f), 7, 1.5f);
+            pieceIcon(g, i + 1, {45.f, 193.f + i * 78, 54.f, 48.f});
+            text(g, juce::String(pieceNames[i]).toUpperCase(), 116, 191.f + i * 78, 160, 22, 15, white);
+            auto label = paths[size_t(i)].isEmpty() ? "OSCILLATOR / FACTORY" :
+                                                          juce::File(paths[size_t(i)]).getFileName();
+            text(g, label, 116, 216.f + i * 78, 407, 20, 12,
+                 paths[size_t(i)].isEmpty() ? muted : juce::Colour(0xffc8ee9f));
+        }
+        text(g, "SAMPLE ENGINE", 594, 399, 455, 26, 13, gold);
+        text(g, "12-second maximum  /  stereo support  /  transposed playback", 594, 434, 458, 24,
+             12, muted);
+        text(g, "Samples are referenced by file path in saved projects and local packs.",
+             594, 473, 458, 37, 12, muted);
+        text(g, "Tip: Keep your sound files in a permanent sample-library folder.",
+             594, 566, 458, 40, 13, gold);
+    }
     g.setColour(border);
     g.fillRoundedRectangle(710, 91, 215, 10, 3);
     g.setColour(gold);
@@ -462,8 +661,17 @@ void CheckmateEditor::paint(juce::Graphics &g)
 void CheckmateEditor::mouseDown(const juce::MouseEvent &e)
 {
     float x = e.position.x * 1080 / getWidth(), y = e.position.y * 720 / getHeight();
-    if (tab == 2)
+    if (tab == 2 || tab == 4)
         return;
+    if (tab == 5)
+    {
+        if (x >= 28 && x < 566 && y >= 185 && y < 185 + 6 * 78)
+        {
+            samplePiece.setSelectedId(1 + int((y - 185) / 78), juce::sendNotification);
+            repaint();
+        }
+        return;
+    }
     if (tab == 1 && x >= 594 && x < 1042 && y >= 285 && y < 347)
     {
         palette = juce::jlimit(1, 7, 1 + int((x - 594) / 64));
@@ -572,7 +780,7 @@ void CheckmateEditor::timerCallback()
     play.setButtonText(proc.value("run") > .5f ? "STOP MATRIX" : "PLAY MATRIX");
     replay.setButtonText(archivePlaying ? "PAUSE REPLAY" : "REPLAY");
     if (tab == 0 && proc.value("bot") > .5f && game.turn < 0 && !legal.empty())
-        execute(game.bot());
+        execute(game.bot(int(proc.value("botStyle"))));
     double now = juce::Time::getMillisecondCounterHiRes();
     if (archivePlaying && now >= nextArchive)
     {
@@ -624,9 +832,269 @@ void CheckmateEditor::restore()
     proc.tension = game.tension();
     status = legal.empty() ? (game.check(game.turn) ? "Checkmate" : "Stalemate")
                            : juce::String(game.turn == 1 ? "White" : "Black") + " to move";
-    tab = juce::jlimit(0, 3, int(s.getProperty("tab", 0)));
+    tab = juce::jlimit(0, 5, int(s.getProperty("tab", 0)));
+    uiGames = proc.gameSnapshot();
+    refreshGameList();
+    refreshSampleInfo();
     showTab(tab);
 }
+int CheckmateEditor::getNumRows()
+{
+    return int(uiGames.tracks[size_t(juce::jlimit(0, 2, gameLane.getSelectedId() - 1))].moves.size());
+}
+void CheckmateEditor::paintListBoxItem(int row, juce::Graphics &g, int width, int height, bool isSelected)
+{
+    const auto &moves = uiGames.tracks[size_t(juce::jlimit(0, 2, gameLane.getSelectedId() - 1))].moves;
+    if (row < 0 || row >= int(moves.size())) return;
+    if (isSelected)
+    {
+        g.setColour(gold.withAlpha(.18f));
+        g.fillRect(0, 0, width, height);
+    }
+    else if (row % 2 == 1)
+    {
+        g.setColour(white.withAlpha(.025f));
+        g.fillRect(0, 0, width, height);
+    }
+    const auto &m = moves[size_t(row)];
+    auto c = isSelected ? gold : white;
+    g.setColour(c);
+    g.setFont(uiFont(13));
+    g.drawText(juce::String(row + 1), 12, 0, 45, height, juce::Justification::centredLeft);
+    g.drawText(juce::String(m.san), 64, 0, 130, height, juce::Justification::centredLeft);
+    g.setColour(muted);
+    g.drawText(pieceNames[juce::jlimit(0, 5, std::abs(m.piece) - 1)], 208, 0, 105, height,
+               juce::Justification::centredLeft);
+    g.drawText(m.note >= 0 ? "MIDI " + juce::String(m.note) : "AUTO", 330, 0, 92, height,
+               juce::Justification::centredLeft);
+    g.drawText(juce::String(m.velocity), 442, 0, 66, height, juce::Justification::centredLeft);
+}
+void CheckmateEditor::selectedRowsChanged(int row)
+{
+    selectedMove = row;
+    updatingMoveEditor = true;
+    const auto &moves = uiGames.tracks[size_t(juce::jlimit(0, 2, gameLane.getSelectedId() - 1))].moves;
+    const bool valid = row >= 0 && row < int(moves.size());
+    for (auto *s : {&noteEditor, &velocityEditor, &durationEditor}) s->setEnabled(valid);
+    if (valid)
+    {
+        const auto &m = moves[size_t(row)];
+        noteEditor.setValue(m.note + 1, juce::dontSendNotification);
+        velocityEditor.setValue(m.velocity, juce::dontSendNotification);
+        durationEditor.setValue(m.duration, juce::dontSendNotification);
+        editInfo.setText("MOVE " + juce::String(row + 1) + " / " + juce::String(m.san) +
+                        "     NOTE  (0 = AUTO)   /   VELOCITY   /   LENGTH %", juce::dontSendNotification);
+    }
+    else
+        editInfo.setText("SELECT A MOVE TO EDIT NOTE, VELOCITY AND LENGTH", juce::dontSendNotification);
+    updatingMoveEditor = false;
+}
+void CheckmateEditor::refreshGameList()
+{
+    const int lane = juce::jlimit(0, 2, gameLane.getSelectedId() - 1);
+    const auto &game = uiGames.tracks[size_t(lane)];
+    movesList.updateContent();
+    if (selectedMove >= int(game.moves.size())) selectedMove = -1;
+    if (selectedMove < 0) movesList.deselectAllRows();
+    else movesList.selectRow(selectedMove, false, true);
+    selectedRowsChanged(selectedMove);
+    gameInfo.setText((game.moves.empty() ? "EMPTY TRACK / IMPORT A PGN OR CAPTURE MATCH" :
+                      juce::String(game.name) + " / " + juce::String(game.moves.size()) + " MOVES"),
+                     juce::dontSendNotification);
+}
+void CheckmateEditor::editSelectedMove()
+{
+    if (updatingMoveEditor) return;
+    auto &moves = uiGames.tracks[size_t(juce::jlimit(0, 2, gameLane.getSelectedId() - 1))].moves;
+    if (selectedMove < 0 || selectedMove >= int(moves.size())) return;
+    auto &m = moves[size_t(selectedMove)];
+    m.note = int(noteEditor.getValue()) - 1;
+    m.velocity = int(velocityEditor.getValue());
+    m.duration = int(durationEditor.getValue());
+    proc.publishGames(uiGames);
+    movesList.repaintRow(selectedMove);
+}
+void CheckmateEditor::importPgnFile()
+{
+    chooser = std::make_unique<juce::FileChooser>("Import PGN main-line games", juce::File(), "*.pgn");
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [safe = juce::Component::SafePointer<CheckmateEditor>(this)](const juce::FileChooser &c)
+        {
+            if (!safe || c.getResult() == juce::File()) return;
+            auto file = c.getResult();
+            if (file.getSize() > 2 * 1024 * 1024)
+            {
+                safe->gameInfo.setText("PGN file exceeds 2 MB", juce::dontSendNotification);
+                return;
+            }
+            auto parsed = checkmate::importPgn(file.loadFileAsString().toStdString());
+            if (!parsed)
+            {
+                safe->gameInfo.setText(juce::String(parsed.error), juce::dontSendNotification);
+                return;
+            }
+            const int start = juce::jlimit(0, 2, safe->gameLane.getSelectedId() - 1);
+            const auto count = std::min(int(parsed.games.size()), 3 - start);
+            for (int i = 0; i < count; ++i)
+                safe->uiGames.tracks[size_t(start + i)] = std::move(parsed.games[size_t(i)]);
+            safe->proc.publishGames(safe->uiGames);
+            safe->selectedMove = -1;
+            safe->refreshGameList();
+            if (int(parsed.games.size()) > count)
+                safe->gameInfo.setText("Imported " + juce::String(count) + " of " +
+                                       juce::String(parsed.games.size()) + " games (three track limit)",
+                                       juce::dontSendNotification);
+        });
+}
+void CheckmateEditor::captureCurrentMatch()
+{
+    if (history.empty())
+    {
+        gameInfo.setText("No moves to capture. Play a match first.", juce::dontSendNotification);
+        return;
+    }
+    checkmate::Chess board;
+    checkmate::MusicalGame gameSequence;
+    gameSequence.name = "Live match";
+    for (auto m : history)
+    {
+        if (gameSequence.moves.size() >= 4096) break;
+        const int piece = board.board[m.from];
+        const bool capture = board.board[m.to] != 0 || (std::abs(piece) == 1 && m.to == board.ep);
+        checkmate::MusicalMove event;
+        event.move = m;
+        event.square = m.to;
+        event.piece = piece;
+        event.san = board.san(m);
+        board.applyUnchecked(m);
+        event.action = board.check(board.turn) ? (board.legal().empty() ? 3 : 2) : (capture ? 1 : 0);
+        event.tension = board.tension();
+        gameSequence.moves.push_back(std::move(event));
+    }
+    uiGames.tracks[size_t(juce::jlimit(0, 2, gameLane.getSelectedId() - 1))] = std::move(gameSequence);
+    proc.publishGames(uiGames);
+    selectedMove = -1;
+    refreshGameList();
+}
+void CheckmateEditor::useArchiveInGameLab()
+{
+    checkmate::Chess board;
+    checkmate::MusicalGame gameSequence;
+    gameSequence.name = checkmate::archiveNames[archiveIndex].toStdString();
+    for (auto san : checkmate::archiveMoves[archiveIndex])
+    {
+        checkmate::Move m;
+        if (!board.playSan(san.toStdString(), m))
+        {
+            gameInfo.setText("Cannot parse built-in archive", juce::dontSendNotification);
+            return;
+        }
+        const int piece = board.board[m.from];
+        const bool capture = board.board[m.to] != 0 || (std::abs(piece) == 1 && m.to == board.ep);
+        checkmate::MusicalMove event;
+        event.move = m;
+        event.square = m.to;
+        event.piece = piece;
+        event.san = board.san(m);
+        board.applyUnchecked(m);
+        event.action = board.check(board.turn) ? (board.legal().empty() ? 3 : 2) : (capture ? 1 : 0);
+        event.tension = board.tension();
+        gameSequence.moves.push_back(std::move(event));
+    }
+    uiGames.tracks[size_t(juce::jlimit(0, 2, gameLane.getSelectedId() - 1))] = std::move(gameSequence);
+    proc.publishGames(uiGames);
+    selectedMove = -1;
+    refreshGameList();
+}
+void CheckmateEditor::exportGameMidi()
+{
+    auto fileMidi = proc.gameMidi();
+    if (fileMidi.getNumTracks() == 0)
+    {
+        gameInfo.setText("Enable a track containing moves before exporting", juce::dontSendNotification);
+        return;
+    }
+    chooser = std::make_unique<juce::FileChooser>("Export edited chess games as MIDI",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("Checkmate-Games.mid"),
+        "*.mid");
+    chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe = juce::Component::SafePointer<CheckmateEditor>(this)](const juce::FileChooser &c)
+        {
+            if (!safe || c.getResult() == juce::File()) return;
+            juce::TemporaryFile temp(c.getResult());
+            bool ok = false;
+            {
+                juce::FileOutputStream out(temp.getFile());
+                if (out.openedOk()) ok = safe->proc.gameMidi().writeTo(out);
+                out.flush();
+                ok = ok && out.getStatus().wasOk();
+            }
+            if (ok) ok = temp.overwriteTargetFileWithTemporary();
+            safe->gameInfo.setText(ok ? "Game MIDI exported" : "MIDI export failed",
+                                    juce::dontSendNotification);
+        });
+}
+void CheckmateEditor::refreshSampleInfo()
+{
+    const auto paths = proc.pieceSamplePaths();
+    const int piece = juce::jlimit(0, 5, samplePiece.getSelectedId() - 1);
+    sampleInfo.setText(paths[size_t(piece)].isEmpty() ?
+            "No sample loaded / original synthesized voice active" :
+            juce::String(pieceNames[piece]) + "  /  " + juce::File(paths[size_t(piece)]).getFileName() +
+            (juce::File(paths[size_t(piece)]).existsAsFile() ? "  /  READY" : "  /  FILE MISSING"),
+            juce::dontSendNotification);
+    repaint();
+}
+void CheckmateEditor::savePresetPack()
+{
+    chooser = std::make_unique<juce::FileChooser>("Save local Checkmate preset pack",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("My-Checkmate.cmate"),
+        "*.cmate");
+    chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe = juce::Component::SafePointer<CheckmateEditor>(this)](const juce::FileChooser &c)
+        {
+            if (!safe || c.getResult() == juce::File()) return;
+            juce::MemoryBlock state;
+            safe->proc.getStateInformation(state);
+            juce::TemporaryFile temp(c.getResult());
+            bool ok = false;
+            {
+                juce::FileOutputStream out(temp.getFile());
+                if (out.openedOk()) ok = out.write(state.getData(), state.getSize());
+                out.flush();
+                ok = ok && out.getStatus().wasOk();
+            }
+            if (ok) ok = temp.overwriteTargetFileWithTemporary();
+            safe->gameInfo.setText(ok ? "Preset pack saved (samples remain external files)" :
+                                       "Pack save failed", juce::dontSendNotification);
+        });
+}
+void CheckmateEditor::openPresetPack()
+{
+    chooser = std::make_unique<juce::FileChooser>("Open local Checkmate preset pack", juce::File(), "*.cmate");
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [safe = juce::Component::SafePointer<CheckmateEditor>(this)](const juce::FileChooser &c)
+        {
+            if (!safe || c.getResult() == juce::File()) return;
+            auto f = c.getResult();
+            if (f.getSize() > 16 * 1024 * 1024 || f.getSize() < 8)
+            {
+                safe->gameInfo.setText("Invalid or oversized preset pack", juce::dontSendNotification);
+                return;
+            }
+            juce::MemoryBlock block;
+            if (!f.loadFileAsData(block))
+            {
+                safe->gameInfo.setText("Cannot read preset pack", juce::dontSendNotification);
+                return;
+            }
+            safe->proc.setStateInformation(block.getData(), int(block.getSize()));
+            safe->restore();
+        });
+}
+
 void CheckmateEditor::exportMatrix()
 {
     chooser = std::make_unique<juce::FileChooser>(

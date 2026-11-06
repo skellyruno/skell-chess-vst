@@ -1,7 +1,7 @@
 #pragma once
 #include "Archive.h"
 #include "PluginProcessor.h"
-class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::Timer
+class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::Timer, private juce::ListBoxModel
 {
   public:
     explicit CheckmateEditor(CheckmateProcessor &);
@@ -29,13 +29,32 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
         juce::String id;
     };
     std::vector<std::unique_ptr<Dial>> dials;
-    std::array<juce::TextButton, 4> tabs;
+    std::array<juce::TextButton, 6> tabs;
     juce::TextButton play{"PLAY MATRIX"}, reset{"NEW MATCH"}, step{"STEP GAME"}, replay{"REPLAY"},
         flip{"FLIP"}, panic{"PANIC"}, exportMidi{"EXPORT MIDI"};
     juce::ToggleButton sync{"Host sync"}, midiOut{"MIDI out"}, bot{"Black bot"}, coupling{"Tension"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAttach, midiAttach, botAttach,
         couplingAttach;
     juce::ComboBox preset, root, scale, division, pattern, voice, wave, archive, midiVoice;
+    juce::ComboBox botStyle, samplePiece, gameLane, matrixSlot;
+    juce::TextButton importGame{"IMPORT PGN"}, exportGame{"EXPORT GAME MIDI"}, captureMatch{"CAPTURE MATCH"},
+        loadArchiveGame{"USE ARCHIVE"}, sampleLoad{"LOAD SAMPLE"}, sampleClear{"REMOVE SAMPLE"},
+        savePack{"SAVE PACK"}, openPack{"OPEN PACK"}, saveSlot{"SAVE SLOT"}, loadSlot{"LOAD SLOT"};
+    juce::ToggleButton gamePlayback{"Game sequencer"}, drumMap{"Beat mapping"},
+        harmony{"Harmony"}, chessFX{"Chess FX"};
+    std::array<juce::ToggleButton, 3> laneOn;
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 3> laneAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> gamePlaybackAttach,
+        drumMapAttach, harmonyAttach, chessFXAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> botStyleAttach;
+    juce::Slider noteEditor, velocityEditor, durationEditor, matrixProbability, matrixRatchet, matrixSwing;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> probabilityAttach,
+        ratchetAttach, swingAttach;
+    juce::ListBox movesList;
+    juce::Label gameInfo, sampleInfo, editInfo;
+    CheckmateProcessor::GameBank uiGames;
+    int selectedMove = -1;
+    bool updatingMoveEditor = false;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rootAttach, scaleAttach,
         divisionAttach, waveAttach, midiVoiceAttach;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -49,6 +68,18 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void persist();
     void restore();
     void exportMatrix();
+    void importPgnFile();
+    void exportGameMidi();
+    void captureCurrentMatch();
+    void useArchiveInGameLab();
+    void refreshGameList();
+    void editSelectedMove();
+    void refreshSampleInfo();
+    void savePresetPack();
+    void openPresetPack();
+    int getNumRows() override;
+    void paintListBoxItem(int row, juce::Graphics &, int width, int height, bool selected) override;
+    void selectedRowsChanged(int lastRowSelected) override;
     static void pieceIcon(juce::Graphics &, int, juce::Rectangle<float>);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(CheckmateEditor)
 };

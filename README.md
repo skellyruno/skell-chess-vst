@@ -35,6 +35,71 @@ Select an output device and MIDI input there if needed.
 The included GitHub Actions workflow builds, runs the tests, and packages both
 Windows outputs. It runs on push, pull request, or manual dispatch.
 
+## Checkmate 2.0 — games, samples, and redesigned interface
+
+**Six tabs:** Match, Matrix, Sound Lab, Archive, **Game Lab**, and **Samples**.
+The default window is now 945×630, with a fixed 3:2 resize ratio. Dark graphite,
+soft ivory/gold and restrained neon accents retain the original Checkmate identity.
+
+**Game Lab**
+
+1. Open **Game Lab**, choose Track A, B, or C, and press **IMPORT PGN**.
+   A `.pgn` file can contain more than one game; games fill available tracks
+   from the selected track onward (maximum three active tracks). The PGN main
+   lines are checked against the native chess engine before being accepted.
+2. Select a move in the scrollable timeline. **MIDI NOTE** is 0 for automatic
+   mapping or 1–128 for MIDI notes 0–127; also set velocity and note length.
+3. Enable the A/B/C tracks, enable **Game sequencer**, press **PLAY MATRIX**,
+   and select the musical subdivision. The games advance in lockstep with the
+   existing matrix clock and loop at their own lengths. Enable **Host sync** to
+   follow the DAW transport, or disable it for standalone free-running playback.
+4. Enable **Beat mapping** for the built-in piece-to-drum MIDI note mapping.
+   With samples loaded, a mapped hit triggers the original one-shot pitch;
+   otherwise it uses the synth voice for that MIDI note.
+5. Press **EXPORT GAME MIDI** to export *enabled* tracks to separate MIDI tracks
+   in a Type 1 standard MIDI file. Notes, velocities, durations, and the
+   optional harmony events are included. Editing works without playing the game.
+6. **CAPTURE MATCH** converts the currently played match to the selected track;
+   **USE ARCHIVE** copies the currently selected built-in Archive game.
+   A chess match can still be played and heard live in the Match tab.
+
+**Samples:** select one of the six pieces in the Samples tab, then choose
+**LOAD SAMPLE**. Decoded WAV/AIFF files of at most 12 seconds are kept in
+memory and played by the existing voice engine with interpolation and pitch
+transposition (source note C4). Remove a sample to restore the original
+oscillator. Loaded samples are immutable once published to audio playback.
+
+**Matrix:** control **probability**, **ratchets (1–4)**, and **swing**, and save
+or recall **16 user banks**. These three groove parameters currently apply
+*globally* to all occupied matrix cells, not to individual cells. Generated
+matrix MIDI export includes their timing/deterministic probability decisions.
+
+**Match bot:** Balanced (original), Aggressive, Defensive, and Experimental
+heuristic playing styles, selectable beside the Black bot toggle. These are
+local, reproducible chess heuristics — not cloud-based machine learning.
+
+**Chess FX** couples drive and delay to board tension, and the original Tension
+control still affects filter/delay. **Harmony** adds interval voices to
+capture/check game events, choosing a brighter or darker third from the game's
+tension value. Both are automatable and enabled independently.
+
+**Local preset packs:** **SAVE PACK** and **OPEN PACK** in Game Lab write/read
+`.cmate` files with synth parameters, games, edited moves, matrix banks and
+sample *file paths*. Sample audio itself is **not embedded**. Keep the original
+sample files available or select replacement files after moving machines.
+This is offline preset sharing, **not** a connected online marketplace.
+
+**Import limitations:** PGN variations and comments are ignored (only the
+main line is imported). Custom FEN starting positions are not yet supported.
+A PGN is limited to 2 MB, 32 parsed games and 4096 moves per game. In the
+current UI, up to three games are assigned to live tracks at once.
+
+**Performance and reliability:** sequence snapshots and predecoded sample
+buffers are published immutably to the audio callback. Disk reads and parsing
+never occur in `processBlock`. The bounded voice pool and MIDI scheduling
+retain the original instrument architecture. Only pre-existing oscillators
+are used when custom samples are not loaded.
+
 ## Using Checkmate
 
 - **Match:** select a piece, then a marked legal destination to hear its voice.
@@ -68,8 +133,8 @@ Windows outputs. It runs on push, pull request, or manual dispatch.
 - **Panic:** stops the matrix and archive replay, clears delayed triggers and
   effects, releases voices, and sends note-offs for generated MIDI.
 
-The matrix runs in the processor and continues when the editor is closed.
-Interactive chess, the simple bot, and archive replay run in the editor;
+The matrix and imported game sequencers run in the processor and continue when
+ the editor is closed. Interactive chess, the local bot, and original archive replay run in the editor;
 archive playback pauses when the editor closes. Parameters, matrix cells,
 match move history, archive position, and editor tab are saved in plugin state.
 The matrix is deliberately disarmed when restoring a project; press Play Matrix
@@ -111,10 +176,14 @@ ctest --test-dir build-core -C Release --output-on-failure
 
 `CheckmateCoreTests` checks chess perft through depth 4, castling, en passant,
 mate, promotion, scale-note ranges, DSP at five sample rates, output bounds,
-MIDI release, voice-pool stress, and allocation-free core rendering.
+MIDI release, voice-pool stress, allocation-free core rendering and one-shot
+sample playback. `CheckmateImportTests` checks PGN tags, multiple games,
+comments, nested variations, SAN legality, captures, checkmate and malformed
+files.
 `CheckmatePluginTests` checks all five archive move lists, generated MIDI,
-transport and seeks, saved-state round trips, MIDI export, variable block sizes,
-and editor rendering. Linux GUI tests require an X server (for example Xvfb).
+transport and seeks, saved-state round trips, matrix and edited game MIDI exports,
+custom WAV decoding/sample-path restoration, variable block sizes, and rendering
+all six editor screens at large/small sizes. Linux GUI tests require an X server (for example Xvfb).
 
 See `VALIDATION.md` for the actual checks completed with this delivery and the
 remaining Windows/FL Studio acceptance steps.

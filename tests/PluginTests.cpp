@@ -113,6 +113,76 @@ int main()
         require(parsed.readFrom(input), "MIDI parse");
         require(parsed.getTimeFormat() == 960, "MIDI ticks");
 
+        // Imported games are editable, produce MIDI and survive plugin state round-trips.
+        auto imported = checkmate::importPgn("1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 *");
+        require(bool(imported), "PGN imported in plugin test");
+        CheckmateProcessor gameProcessor;
+        gameProcessor.setRateAndBufferSizeDetails(48000, 256);
+        gameProcessor.prepareToPlay(48000, 256);
+        gameProcessor.loadPattern(4); // Isolate imported game from matrix events.
+        CheckmateProcessor::GameBank bank;
+        bank.tracks[0] = std::move(imported.games.front());
+        bank.tracks[0].moves[0].note = 72;
+        bank.tracks[0].moves[0].velocity = 123;
+        bank.tracks[0].moves[0].duration = 60;
+        gameProcessor.publishGames(bank);
+        gameProcessor.setValue("gamePlayback", 1);
+        gameProcessor.setValue("run", 1);
+        auto exportedGame = gameProcessor.gameMidi();
+        require(exportedGame.getNumTracks() == 1, "one enabled game track exports");
+        bool editedNote = false;
+        if (auto *track = exportedGame.getTrack(0))
+            for (int e = 0; e < track->getNumEvents(); ++e)
+            {
+                auto message = track->getEventPointer(e)->message;
+                if (message.isNoteOn() && message.getNoteNumber() == 72)
+                    editedNote = message.getVelocity() > 100;
+            }
+        require(editedNote, "edited velocity and MIDI note exported");
+        gameProcessor.processBlock(audio, midi);
+        bool gameMidiOn = false;
+        for (auto e : midi) if (e.getMessage().isNoteOn()) gameMidiOn = true;
+        require(gameMidiOn, "imported game playback triggers notes");
+        juce::MemoryBlock gameState;
+        gameProcessor.getStateInformation(gameState);
+        CheckmateProcessor gameRestored;
+        gameRestored.setStateInformation(gameState.getData(), int(gameState.getSize()));
+        auto restoredBank = gameRestored.gameSnapshot();
+        require(restoredBank.tracks[0].moves.size() == 6, "game sequence restored");
+        require(restoredBank.tracks[0].moves[0].note == 72 &&
+                    restoredBank.tracks[0].moves[0].velocity == 123 &&
+                    restoredBank.tracks[0].moves[0].duration == 60,
+                "MIDI edits restored");
+        require(gameRestored.value("run") < .5f, "new game transport disarmed after restore");
+        // Decode a real temporary WAV and verify per-piece sample routing and persistence.
+        auto sampleFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getNonexistentChildFile("Checkmate-Sample-Test", ".wav", false);
+        {
+            auto stream = std::make_unique<juce::FileOutputStream>(sampleFile);
+            juce::WavAudioFormat format;
+            auto *writer = format.createWriterFor(stream.get(), 48000, 2, 16, {}, 0);
+            require(writer != nullptr, "temporary WAV writer");
+            stream.release();
+            juce::AudioBuffer<float> sample(2, 2400);
+            for (int i = 0; i < sample.getNumSamples(); ++i)
+            {
+                sample.setSample(0, i, .4f);
+                sample.setSample(1, i, -.3f);
+            }
+            require(writer->writeFromAudioSampleBuffer(sample, 0, sample.getNumSamples()),
+                    "write sample fixture");
+            delete writer;
+        }
+        juce::String error;
+        require(gameProcessor.loadPieceSample(0, sampleFile, error), "sample load");
+        require(!gameProcessor.pieceSamplePaths()[0].isEmpty(), "piece sample path active");
+        gameProcessor.getStateInformation(gameState);
+        CheckmateProcessor samplesRestored;
+        samplesRestored.setStateInformation(gameState.getData(), int(gameState.getSize()));
+        require(samplesRestored.pieceSamplePaths()[0] == sampleFile.getFullPathName(),
+                "sample file path survives save/restore");
+        sampleFile.deleteFile();
+        gameProcessor.clearPieceSample(0);
         PlayHead ph;
         p.setPlayHead(&ph);
         p.setValue("hostSync", 1);
@@ -149,7 +219,7 @@ int main()
             visual.prepareToPlay(48000, 256);
             auto editor = std::unique_ptr<juce::AudioProcessorEditor>(visual.createEditor());
 
-            for (auto tab : {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE"})
+            for (auto tab : {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE", "GAME LAB", "SAMPLES"})
             {
 
                 juce::TextButton *target = nullptr;
@@ -182,8 +252,8 @@ int main()
                 require(png.writeImageToStream(small, smallOut), "small preview render");
             }
         }
-        std::cout << "PASS: five complete archives; MIDI on/off; matrix play/stop; state round-trip; MIDI "
-                     "export; host sync/seek/stop; variable blocks; editor render\n";
+        std::cout << "PASS: archives; MIDI; matrix; game PGN/MIDI editing/playback/state; piece WAV ";
+        std::cout << "load/state; host sync/seek/stop; variable blocks; six-page UI render\n";
         return 0;
     }
     catch (const std::exception &e)

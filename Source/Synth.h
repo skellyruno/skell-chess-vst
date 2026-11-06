@@ -43,11 +43,20 @@ struct Settings
     bool tensionMod = true;
     std::array<PieceConfig, 6> pieces = defaultPieces;
 };
+// Immutable, predecoded audio; owned by the processor for longer than any voice.
+struct SampleData
+{
+    double sampleRate = 44100;
+    std::vector<float> left, right;
+    bool valid() const { return sampleRate > 0 && left.size() >= 2 && right.size() == left.size(); }
+};
 struct Voice
 {
     bool active = false, releasing = false, external = false;
     int note = 0, channel = 1, piece = 0, wave = 0, wait = 0, age = 0, gate = 0, releaseAge = 0;
     double phase = 0, phase2 = 0, delta = 0, delta2 = 0;
+    const SampleData *sampleData = nullptr;
+    double samplePosition = 0, sampleStep = 1;
     float panL = .707f, panR = .707f;
     float level = 0, releaseLevel = 0, velocity = 0, pan = 0, attack = 0, decay = 0, sustain = 0, release = 0,
           filter = 0;
@@ -93,7 +102,7 @@ class Synth
         smoothedVolume = 0;
     }
     void start(int note, int channel, int piece, float velocity, int delaySamples = 0, bool external = false,
-               int action = 0)
+               int action = 0, const SampleData *sampleData = nullptr, int gateSamples = 0)
     {
         piece = std::clamp(piece, 0, 5);
         auto cfg = settings.pieces[piece];
@@ -114,6 +123,9 @@ class Synth
         v.channel = channel;
         v.piece = piece;
         v.wave = cfg.wave;
+        v.sampleData = sampleData != nullptr && sampleData->valid() ? sampleData : nullptr;
+        v.sampleStep = v.sampleData ? (v.sampleData->sampleRate / rate) *
+                       std::pow(2., (note - 60) / 12.) : 1;
         v.external = external;
         v.wait = delaySamples;
         v.velocity = velocity * .16f;
@@ -126,7 +138,7 @@ class Synth
         v.delta = std::min(.45, 440 * std::pow(2., (note - 69) / 12.) / rate);
         v.delta2 = std::min(.45, v.delta * (piece == 4 ? 1.004 : piece == 3 ? .5 : 2));
         v.release = std::max(.01f, settings.release + cfg.release);
-        v.gate = int(rate * .18);
+        v.gate = gateSamples > 0 ? gateSamples : int(rate * .18);
         v.filter = cfg.filter + (action == 1 ? .5f : 0);
     }
     void off(int note, int channel)
@@ -165,7 +177,7 @@ class Synth
                 --v.wait;
                 continue;
             }
-            if (!v.external && v.age >= v.gate && !v.releasing)
+            if (!v.external && !v.sampleData && v.age >= v.gate && !v.releasing)
                 releaseVoice(v);
             if (v.releasing)
             {
@@ -186,27 +198,41 @@ class Synth
                 else
                     v.level = v.sustain;
             }
-            double dt = v.delta, dt2 = v.delta2;
-            if (v.piece == 0)
-                dt = std::min(.45, dt * (1 + .05 * std::exp(-double(v.age) / (rate * .012))));
-            float a = osc(v.phase, dt, v.wave), b = osc(v.phase2, dt2,
-                                                        v.piece == 2   ? 2
-                                                        : v.piece == 3 ? 3
-                                                                       : v.wave);
-            float sample = a;
-            if (v.piece == 2)
-                sample = .8f * a + .2f * b;
-            if (v.piece == 3)
-                sample = .8f * a + .2f * b;
-            if (v.piece == 4)
-                sample = .5f * (a + b);
-            v.phase += dt;
-            v.phase -= std::floor(v.phase);
-            v.phase2 += dt2;
-            v.phase2 -= std::floor(v.phase2);
-            sample *= v.level * v.velocity;
-            l += sample * v.panL;
-            r += sample * v.panR;
+            float sampleL = 0, sampleR = 0;
+            if (v.sampleData)
+            {
+                const auto &data = *v.sampleData;
+                const size_t i = static_cast<size_t>(v.samplePosition);
+                if (i + 1 >= data.left.size())
+                {
+                    v.active = false;
+                    continue;
+                }
+                const float frac = float(v.samplePosition - double(i));
+                sampleL = data.left[i] + (data.left[i + 1] - data.left[i]) * frac;
+                sampleR = data.right[i] + (data.right[i + 1] - data.right[i]) * frac;
+                v.samplePosition += v.sampleStep;
+            }
+            else
+            {
+                double dt = v.delta, dt2 = v.delta2;
+                if (v.piece == 0)
+                    dt = std::min(.45, dt * (1 + .05 * std::exp(-double(v.age) / (rate * .012))));
+                float a = osc(v.phase, dt, v.wave), b = osc(v.phase2, dt2,
+                                                            v.piece == 2   ? 2
+                                                            : v.piece == 3 ? 3
+                                                                           : v.wave);
+                float sample = a;
+                if (v.piece == 2 || v.piece == 3) sample = .8f * a + .2f * b;
+                if (v.piece == 4) sample = .5f * (a + b);
+                v.phase += dt;
+                v.phase -= std::floor(v.phase);
+                v.phase2 += dt2;
+                v.phase2 -= std::floor(v.phase2);
+                sampleL = sampleR = sample;
+            }
+            l += sampleL * v.level * v.velocity * v.panL;
+            r += sampleR * v.level * v.velocity * v.panR;
             mod = std::max(mod, v.filter * v.level);
             ++v.age;
         }
