@@ -34,7 +34,7 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     look.setColour(juce::ComboBox::outlineColourId, border);
     look.setColour(juce::ComboBox::textColourId, white);
     look.setColour(juce::TextButton::buttonColourId, panel);
-    look.setColour(juce::TextButton::buttonOnColourId, gold.darker(.5f));
+    look.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff304a35));
     look.setColour(juce::TextButton::textColourOffId, white);
     setLookAndFeel(&look);
     const char *tabNames[] = {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE", "GAME LAB", "SAMPLES"};
@@ -42,6 +42,8 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     {
         addAndMakeVisible(tabs[i]);
         tabs[i].setButtonText(tabNames[i]);
+        tabs[i].setTooltip("Show " + juce::String(tabNames[i]).toLowerCase() + " controls");
+        tabs[i].setColour(juce::TextButton::textColourOnId, juce::Colour(0xffd8f5ac));
         tabs[i].onClick = [this, i] { showTab(i); };
     }
     for (auto *b : {&play, &reset, &step, &replay, &flip, &panic, &exportMidi})
@@ -297,6 +299,7 @@ void CheckmateEditor::addDial(const juce::String &id, const juce::String &name)
     d->slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 78, 18);
     d->slider.setNumDecimalPlacesToDisplay((id == "cutoff" || id == "bpm") ? 0 : 2);
     d->slider.setPopupDisplayEnabled(true, false, this);
+    d->slider.setTooltip(name + " / Double-click to reset to factory value");
     if (auto *p = proc.parameters.getParameter(id))
         d->slider.setDoubleClickReturnValue(true, p->convertFrom0to1(p->getDefaultValue()));
     addAndMakeVisible(d->slider);
@@ -631,7 +634,14 @@ void CheckmateEditor::paint(juce::Graphics &g)
     }
     else if (tab == 2)
     {
-        text(g, "SOUND LAB", 28, 144, 500, 20, 12, gold);
+        // Separate the global tone section from the six piece-specific controls.
+        g.setColour(panel);
+        g.fillRoundedRectangle(22, 158, 1036, 276, 10);
+        g.fillRoundedRectangle(22, 454, 1036, 214, 10);
+        g.setColour(border.withAlpha(.85f));
+        g.drawRoundedRectangle(22.5f, 158.5f, 1035.f, 275.f, 10, 1.f);
+        g.drawRoundedRectangle(22.5f, 454.5f, 1035.f, 213.f, 10, 1.f);
+        text(g, "SOUND LAB / MASTER SHAPING", 28, 144, 520, 20, 12, gold);
         g.setColour(border);
         g.drawHorizontalLine(438, 28, 1052);
         text(g, "PIECE PERSONALITY", 28, 442, 480, 20, 12, gold);
@@ -685,10 +695,13 @@ void CheckmateEditor::paint(juce::Graphics &g)
         text(g, "Tip: Keep your sound files in a permanent sample-library folder.",
              594, 566, 458, 40, 13, gold);
     }
-    g.setColour(border);
-    g.fillRoundedRectangle(710, 91, 215, 10, 3);
-    g.setColour(gold);
-    g.fillRoundedRectangle(710, 91, 215 * juce::jlimit(0.f, 1.f, proc.peak.load()), 10, 3);
+    // Meter lives in the header; it must not obscure the host-sync or FX controls.
+    constexpr float meterX = 265.f, meterY = 59.f, meterW = 585.f;
+    g.setColour(juce::Colour(0xff293341));
+    g.fillRoundedRectangle(meterX, meterY, meterW, 4.f, 2.f);
+    g.setColour(juce::Colour(0xffb9e77a));
+    g.fillRoundedRectangle(meterX, meterY,
+        meterW * juce::jlimit(0.f, 1.f, proc.peak.load()), 4.f, 2.f);
 }
 void CheckmateEditor::mouseDown(const juce::MouseEvent &e)
 {
