@@ -1,5 +1,6 @@
 #pragma once
 #include "Archive.h"
+#include "CheckmateLookAndFeel.h"
 #include "PluginProcessor.h"
 class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::Timer, private juce::ListBoxModel
 {
@@ -12,7 +13,7 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
 
   private:
     CheckmateProcessor &proc;
-    juce::LookAndFeel_V4 look;
+    CheckmateLookAndFeel look;
     checkmate::Chess game;
     checkmate::Chess archiveBoard;
     checkmate::Move archiveLastMove{};

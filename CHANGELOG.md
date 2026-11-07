@@ -1,3 +1,13 @@
+## 2.2.0 — DSP and UI refinement
+
+- Replaced per-sample triangle additive synthesis with precomputed, harmonic-limited tables. Tables are generated in `prepareToPlay`, never in the real-time render loop.
+- Smoothed resonance automation and removed DC at a bass-safe 10 Hz after the output stage.
+- Added a five-millisecond tail fade for one-shot samples to prevent end-of-buffer clicks.
+- Added a vector-rendered knob with a restrained lime value ring, improved control tips and a grouped Sound Lab layout.
+- Repositioned the output meter into the header so it does not overlap FX toggles.
+- Extended standalone DSP tests for one-shot DC suppression, polyphony and allocation-free triangle playback.
+- Parameter IDs, session serialization, preset format and original six pages remain compatible with 2.1.
+
 # Checkmate release notes
 
 ## 2.1.0 — reliability and UI polish

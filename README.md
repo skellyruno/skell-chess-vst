@@ -41,7 +41,7 @@ The Samples view marks missing files and caches those checks to keep redraws fas
 PGN imports now handle games without results, reject unmatched variations, and
 accept common zero-based castling notation with check/checkmate suffixes.
 
-## Checkmate 2.1 — games, samples, and refined workflow
+## Checkmate 2.2 — games, samples, and refined workflow
 
 **Six tabs:** Match, Matrix, Sound Lab, Archive, **Game Lab**, and **Samples**.
 The default window is now 945×630, with a fixed 3:2 resize ratio. Dark graphite,
@@ -199,3 +199,7 @@ remaining Windows/FL Studio acceptance steps.
 JUCE is fetched separately and retains its own license. Product identity is
 Checkmate / Skell Audio, with a distinct VST3 plugin code of CkMt. The archive
 contains source, build configuration, tests, and documentation.
+
+### 2.2 polish notes
+
+The sound engine now precomputes its band-limited triangle harmonics during preparation to reduce per-voice real-time CPU cost. It also suppresses DC after the final saturation stage, smooths resonance changes, and fades the ends of one-shot samples. The Sound Lab uses vector dials, a segmented layout and a relocated output meter. Presets and saved session IDs are unchanged.

@@ -83,6 +83,18 @@ class Synth
                 d.pos = 0;
                 d.low = 0;
             }
+        // Precompute the original band-limited triangle partials outside the audio thread.
+        // Each table contains one additional odd harmonic (1, 3, ..., 15).
+        for (size_t band = 0; band < triangleTables.size(); ++band)
+            for (size_t i = 0; i <= triangleTableSize; ++i)
+            {
+                const double phase = double(i) / double(triangleTableSize);
+                double sum = 0;
+                for (int n = 1; n <= int(2 * band + 1); n += 2)
+                    sum += ((n % 4 == 1) ? 1. : -1.) * std::sin(2 * pi * n * phase) / (n * n);
+                triangleTables[band][i] = float(sum * 8 / (pi * pi));
+            }
+        dcFeedback = float(std::exp(-2.0 * pi * 10.0 / rate));
         cachedDecay = -1;
         reset();
     }
@@ -99,6 +111,9 @@ class Synth
             d.low = 0;
         }
         ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0;
+        dcInput[0] = dcInput[1] = dcOutput[0] = dcOutput[1] = 0;
+        smoothCutoff = std::clamp(settings.cutoff, 40.f, float(rate * .4));
+        smoothResonance = std::clamp(settings.resonance, .5f, 20.f);
         smoothedVolume = 0;
     }
     void start(int note, int channel, int piece, float velocity, int delaySamples = 0, bool external = false,
@@ -209,8 +224,12 @@ class Synth
                     continue;
                 }
                 const float frac = float(v.samplePosition - double(i));
-                sampleL = data.left[i] + (data.left[i + 1] - data.left[i]) * frac;
-                sampleR = data.right[i] + (data.right[i + 1] - data.right[i]) * frac;
+                // A one-shot ending on a non-zero sample can click. Fade its last 5 ms
+                // without modifying the predecoded sample or allocating on the audio thread.
+                const double remaining = double(data.left.size() - 1) - v.samplePosition;
+                const float tailGain = float(std::clamp(remaining / (data.sampleRate * .005), 0., 1.));
+                sampleL = (data.left[i] + (data.left[i + 1] - data.left[i]) * frac) * tailGain;
+                sampleR = (data.right[i] + (data.right[i + 1] - data.right[i]) * frac) * tailGain;
                 v.samplePosition += v.sampleStep;
             }
             else
@@ -239,8 +258,10 @@ class Synth
         float target = settings.cutoff * (1 + mod * .8f) *
                        (settings.tensionMod ? 1 + (settings.tension - .25f) * .8f : 1);
         smoothCutoff += (std::clamp(target, 40.f, float(rate * .4)) - smoothCutoff) * .002f;
+        // Resonance smoothing prevents coefficient jumps during fast automation.
+        smoothResonance += (std::clamp(settings.resonance, .5f, 20.f) - smoothResonance) * .002f;
         float g = std::tan(float(pi) * smoothCutoff / float(rate)),
-              k = 1 / std::clamp(settings.resonance, .5f, 20.f);
+              k = 1 / smoothResonance;
         float a1 = 1 / (1 + g * (g + k)), a2 = g * a1, a3 = g * a2;
         auto filter = [&](float x, int c)
         {
@@ -293,8 +314,17 @@ class Synth
         r += wet[1] * settings.reverb;
         float mid = (l + r) * .5f, side = (l - r) * settings.width * .5f;
         smoothedVolume += (settings.volume - smoothedVolume) * .001f;
-        left = std::tanh((mid + side) * smoothedVolume);
-        right = std::tanh((mid - side) * smoothedVolume);
+        // Remove subsonic DC after saturation; 10-Hz corner retains bass weight.
+        const float shaped[2] = {std::tanh((mid + side) * smoothedVolume),
+                                 std::tanh((mid - side) * smoothedVolume)};
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            const float highPassed = shaped[channel] - dcInput[channel] + dcFeedback * dcOutput[channel];
+            dcInput[channel] = shaped[channel];
+            dcOutput[channel] = highPassed;
+        }
+        left = std::clamp(dcOutput[0], -1.f, 1.f);
+        right = std::clamp(dcOutput[1], -1.f, 1.f);
     }
 
   private:
@@ -309,7 +339,10 @@ class Synth
     size_t write = 0;
     std::array<float, 8> roomFeedback{};
     float cachedDecay = -1, cachedGrit = -1, quant = 65536;
-    float ic1[2]{}, ic2[2]{}, smoothCutoff = 3400, smoothedVolume = 0;
+    float ic1[2]{}, ic2[2]{}, smoothCutoff = 3400, smoothResonance = 4.5f, smoothedVolume = 0;
+    float dcInput[2]{}, dcOutput[2]{}, dcFeedback = .999f;
+    static constexpr size_t triangleTableSize = 2048;
+    std::array<std::array<float, triangleTableSize + 1>, 8> triangleTables{};
     static void releaseVoice(Voice &v)
     {
         if (!v.releasing)
@@ -333,19 +366,23 @@ class Synth
         }
         return 0;
     }
-    static float osc(double p, double dt, int wave)
+    float osc(double p, double dt, int wave) const
     {
         if (wave == 0)
             return float(2 * p - 1 - blep(p, dt));
         if (wave == 1)
             return float((p < .5 ? 1 : -1) + blep(p, dt) - blep(std::fmod(p + .5, 1.), dt));
-        // Harmonic-limited triangle avoids corner aliasing near Nyquist.
+        // Wavetable has the same band-limited Fourier harmonics as the former
+        // per-sample additive oscillator, with no transcendental calls per voice.
         if (wave == 2)
         {
-            double v = 0;
-            for (int n = 1; n <= 15 && n * dt < .48; n += 2)
-                v += ((n % 4 == 1) ? 1. : -1.) * std::sin(2 * pi * n * p) / (n * n);
-            return float(v * 8 / (pi * pi));
+            const int highest = std::min(15, int(.48 / std::max(dt, 1.e-9)));
+            const size_t band = size_t(std::clamp((highest - 1) / 2, 0, 7));
+            const double position = p * double(triangleTableSize);
+            const size_t index = size_t(position);
+            const float fraction = float(position - double(index));
+            const auto &table = triangleTables[band];
+            return table[index] + (table[index + 1] - table[index]) * fraction;
         }
         return float(std::sin(2 * pi * p));
     }

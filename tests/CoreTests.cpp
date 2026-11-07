@@ -173,6 +173,53 @@ int main()
         require(sampledEnergy > 0, "custom sample produces audio");
         require(allocs == 0, "sample playback no allocations");
         for (auto v : sampler.voices) require(!v.active, "sample terminates at buffer end");
+
+        // A constant-polarity one-shot must not leave persistent DC at the output.
+        // Test also exercises the sample-tail fade and high-resolution triangle tables.
+        SampleData dcSample;
+        dcSample.sampleRate = 48000;
+        dcSample.left.assign(48000, .75f);
+        dcSample.right.assign(48000, .75f);
+        Synth dcTest;
+        dcTest.prepare(48000);
+        dcTest.settings.reverb = 0;
+        dcTest.settings.delay = 0;
+        dcTest.settings.drive = 0;
+        dcTest.settings.volume = 1;
+        dcTest.start(60, 1, 0, 1.f, 0, false, 0, &dcSample);
+        double dcMean = 0;
+        for (int i = 0; i < 48000; ++i)
+        {
+            float l, r;
+            dcTest.render(l, r);
+            require(std::isfinite(l) && std::isfinite(r), "DC suppression finite");
+            if (i >= 28800 && i < 38400) dcMean += l;
+        }
+        require(std::abs(dcMean / 9600) < .01, "10 Hz DC blocker removes steady offset");
+
+        Synth triangleStress;
+        triangleStress.prepare(48000);
+        for (int i = 0; i < 72; ++i)
+            triangleStress.start(24 + i, 1, 1, .75f);
+        // All of these voices use the triangle wavetable (octave-dependent band limiting).
+        for (auto &v : triangleStress.voices)
+            if (v.active) { v.wave = 2; v.piece = 0; }
+        double triangleEnergy = 0;
+        watchAlloc = true;
+        for (int i = 0; i < 4800; ++i)
+        {
+            float l, r;
+            triangleStress.render(l, r);
+            triangleEnergy += l * l + r * r;
+            if (!std::isfinite(l) || !std::isfinite(r))
+            {
+                watchAlloc = false;
+                throw std::runtime_error("triangle stress finite");
+            }
+        }
+        watchAlloc = false;
+        require(triangleEnergy > .001, "wavetable oscillators remain audible");
+        require(allocs == 0, "triangle wavetable render allocation-free");
         Synth stress;
         stress.prepare(48000);
         std::mt19937 rng(17);

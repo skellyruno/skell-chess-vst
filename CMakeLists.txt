@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Checkmate VERSION 2.1.0 LANGUAGES C CXX)
+project(Checkmate VERSION 2.2.0 LANGUAGES C CXX)
 option(CHECKMATE_CORE_ONLY "Build dependency-free engine tests only" OFF)
 include(CTest)
 if(BUILD_TESTING)
@@ -44,7 +44,8 @@ juce_generate_juce_header(Checkmate)
 target_sources(Checkmate PRIVATE
   Source/PluginProcessor.cpp Source/PluginProcessor.h
   Source/PluginEditor.cpp Source/PluginEditor.h
-  Source/Synth.h Source/Chess.h Source/Archive.h Source/GameSequence.h)
+  Source/Synth.h Source/Chess.h Source/Archive.h Source/GameSequence.h
+  Source/CheckmateLookAndFeel.h)
 target_compile_features(Checkmate PRIVATE cxx_std_17)
 target_compile_definitions(Checkmate PUBLIC JUCE_VST3_CAN_REPLACE_VST2=0)
 target_compile_definitions(Checkmate PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
