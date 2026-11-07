@@ -33,6 +33,10 @@ class CheckmateProcessor final : public juce::AudioProcessor
     std::array<std::atomic<int>, 64> matrix{};
     std::atomic<int> activeColumn{-1};
     std::atomic<float> peak{0}, tension{.25f};
+    // Callback-only DSP timing: not a measurement of FL Studio's whole mixer or GUI.
+    std::atomic<float> dspLoadPercent{0.f}, dspPeakPercent{0.f};
+    std::atomic<int> activeVoices{0};
+    std::atomic<std::uint64_t> voiceSteals{0}, overBudgetBlocks{0};
     std::atomic<unsigned> stateRevision{0};
     bool audition(int square, int signedPiece, int action = 0);
     void panic() { panicRequested = true; }
@@ -85,6 +89,8 @@ class CheckmateProcessor final : public juce::AudioProcessor
         int gateSamples = 0, synthNote = -1;
     };
     std::array<Future, 128> future{};
+    double profilerTicksPerSecond = 0.0;
+    float smoothedLoad = 0.f, heldPeakLoad = 0.f;
     int blockSamples = 0;
     int64_t audioClock = 0;
     double freeBeat = 0;

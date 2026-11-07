@@ -2,7 +2,7 @@
 #include <initializer_list>
 namespace
 {
-const juce::Colour bg{0xff090c12}, panel{0xff121823}, border{0xff293341}, gold{0xffeac27b}, muted{0xff8e9bad},
+const juce::Colour bg{0xff090c12}, panel{0xff121823}, border{0xff293341}, gold{0xffc6e889}, muted{0xffa7b4c0},
     white{0xffe9edf2};
 const char *pieceNames[] = {"Pawn", "Knight", "Bishop", "Rook", "Queen", "King"};
 const char *presetNames[] = {"Immortal Arpeggio", "Deep Blue Acid", "Queen's Gambit",
@@ -43,6 +43,7 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
         addAndMakeVisible(tabs[i]);
         tabs[i].setButtonText(tabNames[i]);
         tabs[i].setTooltip("Show " + juce::String(tabNames[i]).toLowerCase() + " controls");
+        tabs[i].setClickingTogglesState(false);
         tabs[i].setColour(juce::TextButton::textColourOnId, juce::Colour(0xffd8f5ac));
         tabs[i].onClick = [this, i] { showTab(i); };
     }
@@ -95,6 +96,11 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     scaleAttach = std::make_unique<CA>(proc.parameters, "scale", scale);
     divisionAttach = std::make_unique<CA>(proc.parameters, "division", division);
     midiVoiceAttach = std::make_unique<CA>(proc.parameters, "midiPiece", midiVoice);
+    sync.setTooltip("Follow the DAW tempo and transport / OFF uses manual BPM");
+    midiOut.setTooltip("Send generated chess notes to the DAW as MIDI");
+    bot.setTooltip("Enable the opponent's chess engine");
+    coupling.setTooltip("Modulate the sound with chess-board tension");
+    panic.setTooltip("Release all notes and clear effects immediately");
     syncAttach = std::make_unique<BA>(proc.parameters, "hostSync", sync);
     midiAttach = std::make_unique<BA>(proc.parameters, "midiOut", midiOut);
     botAttach = std::make_unique<BA>(proc.parameters, "bot", bot);
@@ -194,7 +200,8 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
         label->setJustificationType(juce::Justification::centredLeft);
     }
     movesList.setModel(this);
-    movesList.setRowHeight(27);
+    movesList.setRowHeight(30);
+    movesList.setTooltip("Select a chess move to edit its MIDI note, velocity and length");
     movesList.setColour(juce::ListBox::backgroundColourId, panel);
     movesList.setColour(juce::ListBox::outlineColourId, border);
     movesList.setOutlineThickness(1);
@@ -538,6 +545,9 @@ void CheckmateEditor::paint(juce::Graphics &g)
     g.setColour(border);
     g.drawHorizontalLine(68, 0, 1080);
     g.drawHorizontalLine(129, 28, 1052);
+    // Every page shares a clear navigation state rather than relying on button colour alone.
+    g.setColour(gold);
+    g.fillRoundedRectangle(264.f + 99.f * float(tab), 53.f, 94.f, 3.f, 1.5f);
     text(g, "CHECKMATE", 28, 16, 230, 28, 27, gold);
     g.setColour(juce::Colour(0xffd0ec8b).withAlpha(.7f));
     g.fillRoundedRectangle(29, 59, 172, 2, 1);
@@ -608,7 +618,7 @@ void CheckmateEditor::paint(juce::Graphics &g)
         }
         else
         {
-            text(g, tab == 3 ? "GRANDMASTER ARCHIVE" : "MATCH SONIFIER", 594, tab == 3 ? 258 : 312, 458, 22,
+            text(g, tab == 3 ? "GRANDMASTER ARCHIVE" : "MATCH SONIFIER", 594, tab == 3 ? 258.f : 312.f, 458, 22,
                  13, gold);
             if (tab == 0)
             {
@@ -646,8 +656,11 @@ void CheckmateEditor::paint(juce::Graphics &g)
         g.drawHorizontalLine(438, 28, 1052);
         text(g, "PIECE PERSONALITY", 28, 442, 480, 20, 12, gold);
         text(g, "INCOMING MIDI VOICE", 774, 442, 278, 20, 11, muted);
-        text(g, "Shape each piece independently. Double-click any dial to restore its default.", 28, 683,
-             1024, 20, 12, muted);
+        text(g, "Double-click any dial to restore its factory value.", 28, 683,
+             530, 20, 12, muted);
+        text(g, "STEALS " + juce::String(proc.voiceSteals.load()) +
+             "   /   BLOCKS OVER BUDGET " + juce::String(proc.overBudgetBlocks.load()),
+             540, 683, 512, 20, 11, muted, juce::Justification::centredRight);
     }
     else if (tab == 4)
     {
@@ -656,6 +669,8 @@ void CheckmateEditor::paint(juce::Graphics &g)
         g.fillRoundedRectangle(582, 149, 484, 520, 8);
         text(g, "MOVE TIMELINE  /  PGN MAIN LINE", 40, 153, 510, 26, 13, gold);
         text(g, "SELECT / EDIT / EXPORT", 594, 352, 450, 20, 13, gold);
+        g.setColour(border);
+        g.drawHorizontalLine(382, 595, 1052);
 
         text(g, "MIDI NOTE / 0 = AUTO", 600, 393, 250, 16, 10, muted);
         text(g, "VELOCITY", 600, 457, 250, 17, 10, muted);
@@ -668,14 +683,16 @@ void CheckmateEditor::paint(juce::Graphics &g)
              594, 150, 458, 24, 12, muted);
         g.setColour(panel);
         g.fillRoundedRectangle(580, 184, 486, 338, 8);
+        g.setColour(border);
+        g.drawRoundedRectangle(580.5f, 184.5f, 485.f, 337.f, 8.f, 1.f);
         const auto paths = proc.pieceSamplePaths();
         for (int i = 0; i < 6; ++i)
         {
             juce::Rectangle<float> r(28.f, 185.f + i * 78, 538.f, 66.f);
-            const bool selected = samplePiece.getSelectedId() == i + 1;
-            g.setColour(selected ? juce::Colour(0xff243627) : panel);
+            const bool isSelectedPiece = samplePiece.getSelectedId() == i + 1;
+            g.setColour(isSelectedPiece ? juce::Colour(0xff243627) : panel);
             g.fillRoundedRectangle(r, 7);
-            g.setColour(selected ? juce::Colour(0xffd0ec8b) : border);
+            g.setColour(isSelectedPiece ? juce::Colour(0xffd0ec8b) : border);
             g.drawRoundedRectangle(r.reduced(.5f), 7, 1.5f);
             pieceIcon(g, i + 1, {45.f, 193.f + i * 78, 54.f, 48.f});
             text(g, juce::String(pieceNames[i]).toUpperCase(), 116, 191.f + i * 78, 160, 22, 15, white);
@@ -695,6 +712,14 @@ void CheckmateEditor::paint(juce::Graphics &g)
         text(g, "Tip: Keep your sound files in a permanent sample-library folder.",
              594, 566, 458, 40, 13, gold);
     }
+    // Real callback timing visible in FL Studio and standalone, independent of host CPU meters.
+    const float average = proc.dspLoadPercent.load(std::memory_order_relaxed);
+    const float maximum = proc.dspPeakPercent.load(std::memory_order_relaxed);
+    const int voices = proc.activeVoices.load(std::memory_order_relaxed);
+    const auto diagnosticColour = maximum >= 90.f ? juce::Colour(0xffef9b82) : muted;
+    text(g, "DSP " + juce::String(average, 1) + "% / " + juce::String(maximum, 1) +
+         "%  |  " + juce::String(voices) + "V", 856, 52, 196, 14, 10, diagnosticColour,
+         juce::Justification::centredRight);
     // Meter lives in the header; it must not obscure the host-sync or FX controls.
     constexpr float meterX = 265.f, meterY = 59.f, meterW = 585.f;
     g.setColour(juce::Colour(0xff293341));
@@ -984,14 +1009,14 @@ void CheckmateEditor::selectedRowsChanged(int row)
 void CheckmateEditor::refreshGameList()
 {
     const int lane = juce::jlimit(0, 2, gameLane.getSelectedId() - 1);
-    const auto &game = uiGames.tracks[size_t(lane)];
+    const auto &selectedGame = uiGames.tracks[size_t(lane)];
     movesList.updateContent();
-    if (selectedMove >= int(game.moves.size())) selectedMove = -1;
+    if (selectedMove >= int(selectedGame.moves.size())) selectedMove = -1;
     if (selectedMove < 0) movesList.deselectAllRows();
     else movesList.selectRow(selectedMove, false, true);
     selectedRowsChanged(selectedMove);
-    gameInfo.setText((game.moves.empty() ? "EMPTY TRACK / IMPORT A PGN OR CAPTURE MATCH" :
-                      juce::String(game.name) + " / " + juce::String(game.moves.size()) + " MOVES"),
+    gameInfo.setText((selectedGame.moves.empty() ? "EMPTY TRACK / IMPORT A PGN OR CAPTURE MATCH" :
+                      juce::String(selectedGame.name) + " / " + juce::String(selectedGame.moves.size()) + " MOVES"),
                      juce::dontSendNotification);
 }
 void CheckmateEditor::editSelectedMove()

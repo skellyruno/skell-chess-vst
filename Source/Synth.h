@@ -60,6 +60,9 @@ struct Voice
     float panL = .707f, panR = .707f;
     float level = 0, releaseLevel = 0, velocity = 0, pan = 0, attack = 0, decay = 0, sustain = 0, release = 0,
           filter = 0;
+    // Post-envelope, pre-effects samples, used to avoid discontinuities on voice replacement.
+    float lastLeft = 0, lastRight = 0, stealLeft = 0, stealRight = 0;
+    int stealRemaining = 0;
 };
 // Fixed voice pool; delay/reverb memory is allocated only during prepare().
 class Synth
@@ -68,10 +71,11 @@ class Synth
     Settings settings;
     double rate = 44100;
     std::array<Voice, 96> voices{};
+    std::uint64_t stolenVoices = 0;
     void prepare(double sr)
     {
         rate = sr;
-        delayL.assign(size_t(sr * 2) + 2, 0);
+        delayL.assign(size_t(sr * 2) + 2, 0.f);
         delayR = delayL;
         write = 0;
         const int lengths[] = {1493, 1601, 1747, 1867};
@@ -79,7 +83,7 @@ class Synth
             for (int k = 0; k < 4; ++k)
             {
                 auto &d = room[c * 4 + k];
-                d.data.assign(size_t((lengths[k] + c * 79) * sr / 44100) + 1, 0);
+                d.data.assign(size_t((lengths[k] + c * 79) * sr / 44100) + 1, 0.f);
                 d.pos = 0;
                 d.low = 0;
             }
@@ -95,18 +99,20 @@ class Synth
                 triangleTables[band][i] = float(sum * 8 / (pi * pi));
             }
         dcFeedback = float(std::exp(-2.0 * pi * 10.0 / rate));
+        stealFadeSamples = std::max(1, int(rate * .004));
         cachedDecay = -1;
         reset();
     }
     void reset()
     {
         for (auto &v : voices)
-            v.active = false;
-        std::fill(delayL.begin(), delayL.end(), 0);
-        std::fill(delayR.begin(), delayR.end(), 0);
+            v = {};
+        stolenVoices = 0;
+        std::fill(delayL.begin(), delayL.end(), 0.f);
+        std::fill(delayR.begin(), delayR.end(), 0.f);
         for (auto &d : room)
         {
-            std::fill(d.data.begin(), d.data.end(), 0);
+            std::fill(d.data.begin(), d.data.end(), 0.f);
             d.pos = 0;
             d.low = 0;
         }
@@ -122,17 +128,40 @@ class Synth
         piece = std::clamp(piece, 0, 5);
         auto cfg = settings.pieces[piece];
         Voice *chosen = nullptr;
-        for (auto &v : voices)
-            if (!v.active)
+        // Prefer a genuinely free voice. Do not truncate a still-fading stolen tail.
+        for (auto &candidate : voices)
+            if (!candidate.active && candidate.stealRemaining == 0)
             {
-                chosen = &v;
+                chosen = &candidate;
                 break;
             }
         if (!chosen)
-            chosen = &*std::min_element(voices.begin(), voices.end(),
-                                        [](const Voice &a, const Voice &b) { return a.level < b.level; });
+        {
+            // Releasing / quiet voices are safer to steal than sustained notes.
+            // Pending scheduled notes are protected; ties prefer the oldest sound.
+            auto priority = [](const Voice &candidate)
+            {
+                if (!candidate.active)
+                    return -1.f + float(candidate.stealRemaining) * .0001f;
+                if (candidate.wait > 0)
+                    return 10.f;
+                return (candidate.releasing ? 0.f : 1.f) +
+                       candidate.level * candidate.velocity + 1.f / (1.f + float(candidate.age));
+            };
+            chosen = &*std::min_element(voices.begin(), voices.end(), [&](const Voice &a, const Voice &b)
+                                        { return priority(a) < priority(b); });
+        }
         auto &v = *chosen;
+        // Keep the outgoing waveform continuous across this exact sample boundary.
+        // The previous sample value decays over 4 ms while the new voice attacks.
+        const float fadeGain = float(v.stealRemaining) / float(stealFadeSamples);
+        const float tailLeft = (v.active ? v.lastLeft : 0.f) + v.stealLeft * fadeGain;
+        const float tailRight = (v.active ? v.lastRight : 0.f) + v.stealRight * fadeGain;
+        if (v.active) ++stolenVoices;
         v = {};
+        v.stealLeft = tailLeft;
+        v.stealRight = tailRight;
+        v.stealRemaining = (tailLeft != 0.f || tailRight != 0.f) ? stealFadeSamples : 0;
         v.active = true;
         v.note = note;
         v.channel = channel;
@@ -185,11 +214,19 @@ class Synth
         float l = 0, r = 0, mod = 0;
         for (auto &v : voices)
         {
+            // Fixed-size crossfade state; never allocates and also runs during MIDI delays.
+            if (v.stealRemaining > 0)
+            {
+                const float fade = float(v.stealRemaining--) / float(stealFadeSamples);
+                l += v.stealLeft * fade;
+                r += v.stealRight * fade;
+            }
             if (!v.active)
                 continue;
             if (v.wait > 0)
             {
                 --v.wait;
+                v.lastLeft = v.lastRight = 0.f;
                 continue;
             }
             if (!v.external && !v.sampleData && v.age >= v.gate && !v.releasing)
@@ -250,8 +287,10 @@ class Synth
                 v.phase2 -= std::floor(v.phase2);
                 sampleL = sampleR = sample;
             }
-            l += sampleL * v.level * v.velocity * v.panL;
-            r += sampleR * v.level * v.velocity * v.panR;
+            v.lastLeft = sampleL * v.level * v.velocity * v.panL;
+            v.lastRight = sampleR * v.level * v.velocity * v.panR;
+            l += v.lastLeft;
+            r += v.lastRight;
             mod = std::max(mod, v.filter * v.level);
             ++v.age;
         }
@@ -341,6 +380,7 @@ class Synth
     float cachedDecay = -1, cachedGrit = -1, quant = 65536;
     float ic1[2]{}, ic2[2]{}, smoothCutoff = 3400, smoothResonance = 4.5f, smoothedVolume = 0;
     float dcInput[2]{}, dcOutput[2]{}, dcFeedback = .999f;
+    int stealFadeSamples = 176;
     static constexpr size_t triangleTableSize = 2048;
     std::array<std::array<float, triangleTableSize + 1>, 8> triangleTables{};
     static void releaseVoice(Voice &v)

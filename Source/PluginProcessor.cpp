@@ -8,7 +8,7 @@ const char *ids[] = {"volume",  "cutoff",     "resonance",   "drive",     "attac
                      "release", "reverb",     "reverbDecay", "delay",     "delayTime", "feedback", "width",
                      "grit",    "tensionMod", "bpm",         "root",      "scale",     "octave",   "division",
                      "run",     "hostSync",   "midiOut",     "midiPiece", "bot"};
-const char *fields[] = {"wave", "octave", "filter", "attack", "release", "velocity", "pan"};
+const char *pieceFieldNames[] = {"wave", "octave", "filter", "attack", "release", "velocity", "pan"};
 } // namespace
 CheckmateProcessor::CheckmateProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
@@ -18,7 +18,7 @@ CheckmateProcessor::CheckmateProcessor()
         globals[i] = parameters.getRawParameterValue(ids[i]);
     for (int p = 0; p < 6; ++p)
         for (int f = 0; f < 7; ++f)
-            pieceParams[p][f] = parameters.getRawParameterValue("p" + juce::String(p) + "_" + fields[f]);
+            pieceParams[p][f] = parameters.getRawParameterValue("p" + juce::String(p) + "_" + pieceFieldNames[f]);
     for (int lane = 0; lane < 3; ++lane)
         laneParameters[size_t(lane)] = parameters.getRawParameterValue("lane" + juce::String(lane));
     loadPattern(0);
@@ -166,6 +166,11 @@ bool CheckmateProcessor::isBusesLayoutSupported(const BusesLayout &l) const
 void CheckmateProcessor::prepareToPlay(double sr, int)
 {
     synth.prepare(sr);
+    profilerTicksPerSecond = double(juce::Time::getHighResolutionTicksPerSecond());
+    smoothedLoad = heldPeakLoad = 0.f;
+    dspLoadPercent = dspPeakPercent = 0.f;
+    activeVoices = 0;
+    voiceSteals = overBudgetBlocks = 0;
     for (auto &c : gates)
         c.fill(0);
     for (auto &f : future)
@@ -270,6 +275,7 @@ void CheckmateProcessor::stopGenerated(int offset, juce::MidiBuffer &out)
 }
 void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuffer &midi)
 {
+    const auto startTicks = juce::Time::getHighResolutionTicks();
     juce::ScopedNoDenormals guard;
     gameReaders.fetch_add(1, std::memory_order_seq_cst);
     buffer.clear();
@@ -448,6 +454,25 @@ void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mi
     peak = blockPeak;
     midi.swapWith(output);
     gameReaders.fetch_sub(1, std::memory_order_seq_cst);
+    // No locks, heap use, or file I/O in the callback. 100% means one callback
+    // consumed its entire sample budget. It does NOT imply a confirmed host xrun.
+    const auto elapsed = juce::Time::getHighResolutionTicks() - startTicks;
+    const double budgetTicks = profilerTicksPerSecond * double(buffer.getNumSamples()) /
+                               std::max(1.0, synth.rate);
+    if (budgetTicks > 0 && buffer.getNumSamples() >= 16)
+    {
+        const float instant = float(std::clamp(100.0 * double(elapsed) / budgetTicks, 0.0, 999.0));
+        smoothedLoad += .1f * (instant - smoothedLoad);
+        heldPeakLoad = std::max(instant, heldPeakLoad * .995f);
+        dspLoadPercent.store(smoothedLoad, std::memory_order_relaxed);
+        dspPeakPercent.store(heldPeakLoad, std::memory_order_relaxed);
+        if (instant >= 100.f) overBudgetBlocks.fetch_add(1, std::memory_order_relaxed);
+    }
+    int sounding = 0;
+    for (const auto &v : synth.voices)
+        if (v.active) ++sounding;
+    activeVoices.store(sounding, std::memory_order_relaxed);
+    voiceSteals.store(synth.stolenVoices, std::memory_order_relaxed);
 }
 juce::ValueTree CheckmateProcessor::sessionCopy() const
 {

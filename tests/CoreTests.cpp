@@ -220,6 +220,61 @@ int main()
         watchAlloc = false;
         require(triangleEnergy > .001, "wavetable oscillators remain audible");
         require(allocs == 0, "triangle wavetable render allocation-free");
+        // Fill the complete pool, release one voice, then confirm the allocator
+        // reclaims that tail and preserves its last sample across the transition.
+        Synth stealing;
+        stealing.prepare(48000);
+        stealing.settings.reverb = 0;
+        stealing.settings.delay = 0;
+        SampleData voiceSample;
+        voiceSample.sampleRate = 48000;
+        voiceSample.left.assign(48000, .7f);
+        voiceSample.right.assign(48000, .6f);
+        for (int i = 0; i < 96; ++i)
+            stealing.start(i == 0 ? 60 : 61 + i % 2, 1, 0, .8f, 0, true, 0, &voiceSample);
+        require(stealing.stolenVoices == 0, "free pool does not steal");
+        for (int i = 0; i < 640; ++i)
+        {
+            float l, r;
+            stealing.render(l, r);
+        }
+        stealing.off(60, 1);
+        for (int i = 0; i < 48; ++i)
+        {
+            float l, r;
+            stealing.render(l, r);
+        }
+        stealing.start(72, 1, 0, 1.f, 0, true, 0, &voiceSample);
+        require(stealing.stolenVoices == 1, "pool pressure steals one released voice");
+        bool preservedTail = false, stolenReleased = true;
+        for (const auto &v : stealing.voices)
+        {
+            if (v.active && v.note == 60) stolenReleased = false;
+            if (v.active && v.note == 72 && v.stealRemaining > 0 &&
+                (std::abs(v.stealLeft) + std::abs(v.stealRight)) > 0.000001f)
+                preservedTail = true;
+        }
+        require(stolenReleased && preservedTail, "oldest released voice carries a continuity tail");
+        // Many simultaneous replacements must not allocate or produce NaN/Inf.
+        const int fadesPerSample = 48;
+        watchAlloc = true;
+        for (int i = 0; i < 256; ++i)
+        {
+            stealing.start(50 + i % 36, 1, 0, .8f, 0, true, 0, &voiceSample);
+            float l, r;
+            for (int j = 0; j < fadesPerSample; ++j)
+            {
+                stealing.render(l, r);
+                if (!std::isfinite(l) || !std::isfinite(r) || std::abs(l) > 1.001f || std::abs(r) > 1.001f)
+                {
+                    watchAlloc = false;
+                    throw std::runtime_error("polyphonic steal finite and bounded");
+                }
+            }
+        }
+        watchAlloc = false;
+        require(allocs == 0, "polyphonic voice stealing without allocations");
+        require(stealing.stolenVoices > 100, "steal path covered repeatedly");
         Synth stress;
         stress.prepare(48000);
         std::mt19937 rng(17);
