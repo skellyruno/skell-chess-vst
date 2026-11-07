@@ -312,9 +312,10 @@ void CheckmateProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::Mi
         {
             hasHost = true;
             hostPlaying = pos->getIsPlaying();
-            if (auto t = pos->getBpm())
-                if (std::isfinite(*t) && *t > 0)
-                    bpm = *t;
+            if (sync)
+                if (auto t = pos->getBpm())
+                    if (std::isfinite(*t) && *t > 0)
+                        bpm = *t;
             if (auto q = pos->getPpqPosition())
                 ppq = *q;
             else

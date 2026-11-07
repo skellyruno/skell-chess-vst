@@ -50,8 +50,8 @@ inline std::string cleanMoveToken(std::string token)
 {
     if (token.empty() || token[0] == '$') return {};
     if (isResultToken(token)) return token;
-    if (token == "0-0") return "O-O";
-    if (token == "0-0-0") return "O-O-O";
+    if (token.rfind("0-0", 0) == 0)
+        std::replace(token.begin(), token.end(), '0', 'O');
     // Portable format: 1.e4, 12...Qxd4, 22... etc.
     while (!token.empty() && std::isdigit(static_cast<unsigned char>(token[0])))
         token.erase(token.begin());
@@ -59,8 +59,8 @@ inline std::string cleanMoveToken(std::string token)
     if (token.empty()) return {};
     if (token == "e.p." || token == "ep" || token == "e.p") return {};
     while (!token.empty() && (token.back() == '!' || token.back() == '?')) token.pop_back();
-    if (token == "0-0") return "O-O";
-    if (token == "0-0-0") return "O-O-O";
+    if (token.rfind("0-0", 0) == 0)
+        std::replace(token.begin(), token.end(), '0', 'O');
     return token;
 }
 // Strictly validate the main line against Chess::legal(), including en-passant,
@@ -100,7 +100,13 @@ inline ImportResult importPgn(const std::string &input)
         if (c == '{') { brace = true; flattened += ' '; continue; }
         if (c == ';') { lineComment = true; flattened += ' '; continue; }
         if (c == '(') { ++variations; flattened += ' '; continue; }
-        if (c == ')') { variations = std::max(0, variations - 1); flattened += ' '; continue; }
+        if (c == ')')
+        {
+            if (variations == 0) { out.error = "Unexpected ')' in PGN"; return out; }
+            --variations;
+            flattened += ' ';
+            continue;
+        }
         if (variations) continue;
         if (c == '[') { tag = true; quoted = false; flattened += "\n["; continue; }
         flattened += c;
@@ -113,7 +119,6 @@ inline ImportResult importPgn(const std::string &input)
     Chess board;
     MusicalGame game;
     std::string white, black, event;
-    bool inGame = false;
     auto finish = [&]
     {
         if (game.moves.empty()) return;
@@ -123,13 +128,23 @@ inline ImportResult importPgn(const std::string &input)
         game = {};
         board.reset();
         white.clear(); black.clear(); event.clear();
-        inGame = false;
     };
     size_t pos = 0;
     while (pos < flattened.size())
     {
         if (flattened[pos] == '[')
         {
+            // Many PGN exports omit the result token. The next tag block still
+            // starts a new game; do not attach those moves to the preceding game.
+            if (!game.moves.empty())
+            {
+                finish();
+                if (out.games.size() > 32)
+                {
+                    out.error = "PGN exceeds the 32-game limit";
+                    return out;
+                }
+            }
             auto end = flattened.find(']', pos);
             if (end == std::string::npos) { out.error = "Invalid PGN tag"; return out; }
             std::string tagValue = flattened.substr(pos + 1, end - pos - 1);
@@ -140,7 +155,6 @@ inline ImportResult importPgn(const std::string &input)
             auto q1 = tagValue.find('"', space), q2 = tagValue.rfind('"');
             if (q1 == std::string::npos || q2 <= q1) continue;
             auto value = tagValue.substr(q1 + 1, q2 - q1 - 1);
-            if (key == "Event" && inGame && !game.moves.empty()) finish();
             if (key == "SetUp" && value == "1")
             {
                 out.error = "FEN-start games are not supported in this version";
@@ -158,7 +172,16 @@ inline ImportResult importPgn(const std::string &input)
         pos = end;
         auto moveText = cleanMoveToken(raw);
         if (moveText.empty()) continue;
-        if (isResultToken(moveText)) { finish(); continue; }
+        if (isResultToken(moveText))
+        {
+            finish();
+            if (out.games.size() > 32)
+            {
+                out.error = "PGN exceeds the 32-game limit";
+                return out;
+            }
+            continue;
+        }
         if (moveText.size() > 32)
         {
             out.error = "Invalid PGN move token (too long)";
@@ -183,7 +206,6 @@ inline ImportResult importPgn(const std::string &input)
         musical.action = board.check(board.turn) ? (board.legal().empty() ? 3 : 2) : (capture ? 1 : 0);
         musical.tension = board.tension();
         game.moves.push_back(std::move(musical));
-        inGame = true;
         if (game.moves.size() > 4096)
         {
             out.error = "A single game exceeds the 4096-move limit";
@@ -196,6 +218,7 @@ inline ImportResult importPgn(const std::string &input)
         }
     }
     finish();
+    if (out.games.size() > 32) out.error = "PGN exceeds the 32-game limit";
     if (out.games.empty() && out.error.empty()) out.error = "No playable main-line moves found";
     return out;
 }

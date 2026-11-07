@@ -14,6 +14,8 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     CheckmateProcessor &proc;
     juce::LookAndFeel_V4 look;
     checkmate::Chess game;
+    checkmate::Chess archiveBoard;
+    checkmate::Move archiveLastMove{};
     std::vector<checkmate::Move> history;
     std::vector<checkmate::Move> legal;
     int selected = -1, tab = 0, palette = 2, archiveIndex = 0, archivePly = 0, pieceEdit = 0;
@@ -63,6 +65,7 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void buildDials();
     void addDial(const juce::String &, const juce::String &);
     void newMatch();
+    void restartArchive();
     void execute(checkmate::Move, bool sound = true);
     void archiveStep();
     void persist();
