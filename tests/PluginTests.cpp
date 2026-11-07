@@ -158,11 +158,11 @@ int main()
         auto sampleFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
                               .getNonexistentChildFile("Checkmate-Sample-Test", ".wav", false);
         {
-            auto stream = std::make_unique<juce::FileOutputStream>(sampleFile);
+            std::unique_ptr<juce::OutputStream> fileOutput = std::make_unique<juce::FileOutputStream>(sampleFile);
             juce::WavAudioFormat format;
-            auto *writer = format.createWriterFor(stream.get(), 48000, 2, 16, {}, 0);
+            auto writer = format.createWriterFor(fileOutput,
+                juce::AudioFormatWriterOptions{}.withSampleRate(48000.0).withNumChannels(2).withBitsPerSample(16));
             require(writer != nullptr, "temporary WAV writer");
-            stream.release();
             juce::AudioBuffer<float> sample(2, 2400);
             for (int i = 0; i < sample.getNumSamples(); ++i)
             {
@@ -171,7 +171,7 @@ int main()
             }
             require(writer->writeFromAudioSampleBuffer(sample, 0, sample.getNumSamples()),
                     "write sample fixture");
-            delete writer;
+            writer.reset();
         }
         juce::String error;
         require(gameProcessor.loadPieceSample(0, sampleFile, error), "sample load");

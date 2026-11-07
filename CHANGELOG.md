@@ -1,3 +1,12 @@
+## 2.3.0 — Voice continuity, diagnostic CPU metrics, six-page polish
+
+- Voice stealing prioritizes released / quiet voices, protects scheduled notes, and adds an allocation-free four-millisecond continuity fade during replacement. Burst polyphony regression tests added.
+- Added host-callback DSP average/recent-peak % of the real-time block budget, active voice count, cumulative steals and potential over-budget block counter. This is real-time telemetry, not an FL Studio-wide CPU statistic.
+- Unified the six-page accent treatment, active-tab underline, control tooltips, clearer Game Lab row selection, and improved sample and Sound Lab panel borders.
+- Fixed project-side MSVC narrowing/shadowing warnings, replaced deprecated JUCE WAV writer test API, and made float buffer initialization explicit.
+- Added an optional offline CPU benchmark (`CHECKMATE_BUILD_CPU_BENCH=ON`) and a repeatable FL Studio profiling protocol. No FL Studio session is claimed to have been executed remotely.
+- Keeps existing parameter IDs, sample file references, and saved-session structure compatible with 2.2.
+
 ## 2.2.0 — DSP and UI refinement
 
 - Replaced per-sample triangle additive synthesis with precomputed, harmonic-limited tables. Tables are generated in `prepareToPlay`, never in the real-time render loop.

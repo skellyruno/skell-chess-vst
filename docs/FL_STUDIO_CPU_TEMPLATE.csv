@@ -1,0 +1,2 @@
+version,host_version,os,cpu_model,sample_rate,buffer_samples,voices,run_number,plugin_dsp_avg_percent,plugin_dsp_peak_percent,voice_steals,over_budget_blocks,fl_studio_cpu_percent,audible_clicks,comments
+2.3,UNMEASURED,UNMEASURED,UNMEASURED,48000,256,8,1,,,,,,UNTESTED,Replace with measured FL Studio results

@@ -41,7 +41,7 @@ The Samples view marks missing files and caches those checks to keep redraws fas
 PGN imports now handle games without results, reject unmatched variations, and
 accept common zero-based castling notation with check/checkmate suffixes.
 
-## Checkmate 2.2 — games, samples, and refined workflow
+## Checkmate 2.3 — games, samples, and refined workflow
 
 **Six tabs:** Match, Matrix, Sound Lab, Archive, **Game Lab**, and **Samples**.
 The default window is now 945×630, with a fixed 3:2 resize ratio. Dark graphite,
@@ -203,3 +203,9 @@ contains source, build configuration, tests, and documentation.
 ### 2.2 polish notes
 
 The sound engine now precomputes its band-limited triangle harmonics during preparation to reduce per-voice real-time CPU cost. It also suppresses DC after the final saturation stage, smooths resonance changes, and fades the ends of one-shot samples. The Sound Lab uses vector dials, a segmented layout and a relocated output meter. Presets and saved session IDs are unchanged.
+
+### CPU profiling & voice continuity (2.3)
+
+Voice stealing now selects the lowest-impact voice and fades the previous waveform contribution over 4 ms instead of hard-cutting. Every page displays a live DSP callback load and current voice count; Sound Lab additionally shows steal and over-budget counters. These measurements are plugin-only, not host-wide CPU. For a reproducible FL Studio session use [the profiling guide](docs/FL_STUDIO_CPU_PROFILING.md).
+
+Build the optional, **offline (not FL Studio)** C++ benchmark with `cmake -S . -B build-bench -DCHECKMATE_CORE_ONLY=ON -DCHECKMATE_BUILD_CPU_BENCH=ON` followed by `cmake --build build-bench` and `./build-bench/CheckmateCpuBench`.
