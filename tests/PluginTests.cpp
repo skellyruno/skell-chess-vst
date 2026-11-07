@@ -184,7 +184,18 @@ int main()
         sampleFile.deleteFile();
         gameProcessor.clearPieceSample(0);
         PlayHead ph;
+        p.prepareToPlay(48000, 256);
         p.setPlayHead(&ph);
+        p.setValue("bpm", 60);
+        p.setValue("hostSync", 0);
+        p.setValue("run", 1);
+        for (int block = 0; block < 52; ++block)
+        {
+            midi.clear();
+            p.processBlock(audio, midi);
+        }
+        require(p.activeColumn == 0, "manual tempo respected when host sync is disabled");
+        p.prepareToPlay(48000, 256);
         p.setValue("hostSync", 1);
         p.setValue("run", 1);
         midi.clear();
@@ -217,7 +228,28 @@ int main()
             CheckmateProcessor visual;
             visual.setRateAndBufferSizeDetails(48000, 256);
             visual.prepareToPlay(48000, 256);
+            juce::ValueTree persistedMatch("SESSION");
+            persistedMatch.setProperty("moves", "52:36,12:28,", nullptr);
+            visual.setSession(persistedMatch);
             auto editor = std::unique_ptr<juce::AudioProcessorEditor>(visual.createEditor());
+            auto clickButton = [&](const juce::String &name)
+            {
+                for (auto *child : editor->getChildren())
+                    if (auto *button = dynamic_cast<juce::TextButton *>(child))
+                        if (button->getButtonText() == name)
+                        {
+                            button->onClick();
+                            return;
+                        }
+                throw std::runtime_error("missing UI button");
+            };
+            clickButton("ARCHIVE");
+            clickButton("STEP GAME");
+            require(visual.sessionCopy()["moves"].toString() == "52:36,12:28,",
+                    "archive replay does not erase current match");
+            clickButton("MATCH");
+            require(visual.sessionCopy()["moves"].toString() == "52:36,12:28,",
+                    "match survives navigation back from archive");
 
             for (auto tab : {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE", "GAME LAB", "SAMPLES"})
             {

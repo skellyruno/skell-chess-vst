@@ -35,7 +35,13 @@ Select an output device and MIDI input there if needed.
 The included GitHub Actions workflow builds, runs the tests, and packages both
 Windows outputs. It runs on push, pull request, or manual dispatch.
 
-## Checkmate 2.0 — games, samples, and redesigned interface
+**2.1 polish:** Archive replay now uses a separate board and will not overwrite an
+in-progress Match. Host tempo affects playback only when Host sync is enabled.
+The Samples view marks missing files and caches those checks to keep redraws fast.
+PGN imports now handle games without results, reject unmatched variations, and
+accept common zero-based castling notation with check/checkmate suffixes.
+
+## Checkmate 2.1 — games, samples, and refined workflow
 
 **Six tabs:** Match, Matrix, Sound Lab, Archive, **Game Lab**, and **Samples**.
 The default window is now 945×630, with a fixed 3:2 resize ratio. Dark graphite,
@@ -49,7 +55,7 @@ soft ivory/gold and restrained neon accents retain the original Checkmate identi
    lines are checked against the native chess engine before being accepted.
 2. Select a move in the scrollable timeline. **MIDI NOTE** is 0 for automatic
    mapping or 1–128 for MIDI notes 0–127; also set velocity and note length.
-3. Enable the A/B/C tracks, enable **Game sequencer**, press **PLAY MATRIX**,
+3. Enable the A/B/C tracks, press **PLAY SEQUENCER** (which also enables Game sequencer),
    and select the musical subdivision. The games advance in lockstep with the
    existing matrix clock and loop at their own lengths. Enable **Host sync** to
    follow the DAW transport, or disable it for standalone free-running playback.

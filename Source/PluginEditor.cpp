@@ -85,8 +85,7 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     archive.onChange = [this]
     {
         archiveIndex = archive.getSelectedId() - 1;
-        newMatch();
-        persist();
+        restartArchive();
     };
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
@@ -98,7 +97,12 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     midiAttach = std::make_unique<BA>(proc.parameters, "midiOut", midiOut);
     botAttach = std::make_unique<BA>(proc.parameters, "bot", bot);
     couplingAttach = std::make_unique<BA>(proc.parameters, "tensionMod", coupling);
-    play.onClick = [this] { proc.setValue("run", proc.value("run") > .5f ? 0.f : 1.f); };
+    play.onClick = [this]
+    {
+        const bool starting = proc.value("run") < .5f;
+        if (starting && tab == 4) proc.setValue("gamePlayback", 1.f);
+        proc.setValue("run", starting ? 1.f : 0.f);
+    };
     reset.onClick = [this]
     {
         if (tab == 1)
@@ -107,6 +111,8 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
             pattern.setSelectedId(5, juce::dontSendNotification);
             repaint();
         }
+        else if (tab == 3)
+            restartArchive();
         else
         {
             newMatch();
@@ -116,6 +122,8 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     step.onClick = [this] { archiveStep(); };
     replay.onClick = [this]
     {
+        if (!archivePlaying && archivePly >= checkmate::archiveMoves[archiveIndex].size())
+            restartArchive();
         archivePlaying = !archivePlaying;
         nextArchive = 0;
     };
@@ -197,15 +205,16 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     openPack.onClick = [this] { openPresetPack(); };
     sampleLoad.onClick = [this]
     {
+        const int chosenPiece = samplePiece.getSelectedId() - 1;
         chooser = std::make_unique<juce::FileChooser>("Choose a WAV or AIFF sample", juce::File(),
                                                         "*.wav;*.aif;*.aiff");
         auto safe = juce::Component::SafePointer<CheckmateEditor>(this);
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [safe](const juce::FileChooser &c)
+            [safe, chosenPiece](const juce::FileChooser &c)
             {
                 if (!safe || c.getResult() == juce::File()) return;
                 juce::String error;
-                const bool ok = safe->proc.loadPieceSample(safe->samplePiece.getSelectedId() - 1,
+                const bool ok = safe->proc.loadPieceSample(chosenPiece,
                                                             c.getResult(), error);
                 if (ok) safe->refreshSampleInfo();
                 else safe->sampleInfo.setText(error, juce::dontSendNotification);
@@ -249,9 +258,23 @@ CheckmateEditor::~CheckmateEditor()
 }
 void CheckmateEditor::showTab(int t)
 {
-    if (t == 3 && tab != 3)
-        newMatch();
+    const int previousTab = tab;
     tab = t;
+    if (previousTab != tab)
+    {
+        if (tab == 5) refreshSampleInfo();
+        if (tab == 3)
+            status = archivePly == 0 ? "Archive ready to replay" :
+                                            "Archive move " + juce::String(archivePly);
+        else if (previousTab == 3)
+        {
+            const bool checked = game.check(game.turn);
+            status = legal.empty() ? (checked ? "Checkmate" : "Stalemate") :
+                         juce::String(game.turn == 1 ? "White" : "Black") + " to move" +
+                         (checked ? " / CHECK" : "");
+        }
+        proc.tension = (tab == 3 ? archiveBoard : game).tension();
+    }
     selected = -1;
     archivePlaying = false;
     for (int i = 0; i < 6; ++i)
@@ -347,7 +370,7 @@ void CheckmateEditor::resized()
     bounds(midiVoice, 774, 471, 278, 32);
     const bool lab = tab == 2, matrixPage = tab == 1, gamePage = tab == 4,
                samplePage = tab == 5;
-    reset.setButtonText(matrixPage ? "CLEAR MATRIX" : "NEW MATCH");
+    reset.setButtonText(matrixPage ? "CLEAR MATRIX" : tab == 3 ? "RESTART ARCHIVE" : "NEW MATCH");
     play.setVisible(tab == 0 || matrixPage || tab == 3 || gamePage);
     if (gamePage) bounds(play, 594, 308, 218, 36);
     division.setVisible(!lab && !samplePage);
@@ -533,15 +556,20 @@ void CheckmateEditor::paint(juce::Graphics &g)
                     g.setColour(gold.withAlpha(.28f));
                     g.fillRect(cell);
                 }
-                if (tab != 1 && !history.empty() && (s == history.back().from || s == history.back().to))
+                const bool lastMove = tab == 3 ?
+                    (archivePly > 0 && (s == archiveLastMove.from || s == archiveLastMove.to)) :
+                    (tab == 0 && !history.empty() &&
+                     (s == history.back().from || s == history.back().to));
+                if (lastMove)
                 {
                     g.setColour(gold.withAlpha(.12f));
                     g.fillRect(cell);
                 }
-                int p = tab == 1 ? proc.matrix[s].load() : game.board[s];
+                int p = tab == 1 ? proc.matrix[s].load() :
+                        tab == 3 ? archiveBoard.board[s] : game.board[s];
                 if (p)
                     pieceIcon(g, p, cell.reduced(7));
-                if (tab != 1 && selected >= 0)
+                if (tab == 0 && selected >= 0)
                     for (auto m : legal)
                         if (m.from == selected && m.to == s)
                         {
@@ -641,10 +669,13 @@ void CheckmateEditor::paint(juce::Graphics &g)
             g.drawRoundedRectangle(r.reduced(.5f), 7, 1.5f);
             pieceIcon(g, i + 1, {45.f, 193.f + i * 78, 54.f, 48.f});
             text(g, juce::String(pieceNames[i]).toUpperCase(), 116, 191.f + i * 78, 160, 22, 15, white);
-            auto label = paths[size_t(i)].isEmpty() ? "OSCILLATOR / FACTORY" :
-                                                          juce::File(paths[size_t(i)]).getFileName();
+            const auto &path = paths[size_t(i)];
+            const bool missing = sampleMissingCache[size_t(i)];
+            const auto label = path.isEmpty() ? juce::String("OSCILLATOR / FACTORY") :
+                  juce::File(path).getFileName() + (missing ? " / FILE MISSING" : " / READY");
             text(g, label, 116, 216.f + i * 78, 407, 20, 12,
-                 paths[size_t(i)].isEmpty() ? muted : juce::Colour(0xffc8ee9f));
+                 path.isEmpty() ? muted : missing ? juce::Colour(0xffe59b88) :
+                                              juce::Colour(0xffc8ee9f));
         }
         text(g, "SAMPLE ENGINE", 594, 399, 455, 26, 13, gold);
         text(g, "12-second maximum  /  stereo support  /  transposed playback", 594, 434, 458, 24,
@@ -719,8 +750,6 @@ void CheckmateEditor::mouseDown(const juce::MouseEvent &e)
 }
 void CheckmateEditor::newMatch()
 {
-    archivePlaying = false;
-    archivePly = 0;
     game.reset();
     history.clear();
     legal = game.legal();
@@ -728,6 +757,17 @@ void CheckmateEditor::newMatch()
     status = "White to move";
     proc.tension = game.tension();
     proc.panic();
+    repaint();
+}
+void CheckmateEditor::restartArchive()
+{
+    archivePlaying = false;
+    archivePly = 0;
+    archiveLastMove = {};
+    archiveBoard.reset();
+    status = "Archive ready to replay";
+    if (tab == 3) proc.tension = archiveBoard.tension();
+    persist();
     repaint();
 }
 void CheckmateEditor::execute(checkmate::Move m, bool sound)
@@ -760,25 +800,43 @@ void CheckmateEditor::archiveStep()
     }
     checkmate::Move m;
     auto san = checkmate::archiveMoves[archiveIndex][archivePly];
-    if (!game.playSan(san.toStdString(), m))
+    if (!archiveBoard.playSan(san.toStdString(), m))
     {
         status = "Archive stopped: invalid move " + san;
         archivePlaying = false;
         repaint();
         return;
     }
-    execute(m);
+    const int piece = archiveBoard.board[m.from];
+    const bool capture = archiveBoard.board[m.to] != 0 ||
+                         (std::abs(piece) == 1 && m.to == archiveBoard.ep);
+    archiveBoard.applyUnchecked(m);
+    archiveLastMove = m;
     ++archivePly;
+    const bool check = archiveBoard.check(archiveBoard.turn);
+    const int action = check ? (archiveBoard.legal().empty() ? 3 : 2) :
+                               (capture ? 1 : 0);
+    if (!proc.audition(m.to, piece, action))
+        status = "Audio queue full";
+    else
+        status = juce::String(archivePly) + ". " + san +
+                 (archivePly >= checkmate::archiveMoves[archiveIndex].size() ? " / FINISHED" : "");
+    proc.tension = archiveBoard.tension();
     persist();
+    repaint();
 }
 void CheckmateEditor::timerCallback()
 {
+    if (tab == 5 && juce::Time::getMillisecondCounter() - lastSampleHealthCheck > 5000u)
+        refreshSampleHealth();
     if (revision != proc.stateRevision.load())
     {
         revision = proc.stateRevision.load();
         restore();
     }
-    play.setButtonText(proc.value("run") > .5f ? "STOP MATRIX" : "PLAY MATRIX");
+    play.setButtonText(proc.value("run") > .5f ?
+                       (tab == 4 ? "STOP SEQUENCER" : "STOP MATRIX") :
+                       (tab == 4 ? "PLAY SEQUENCER" : "PLAY MATRIX"));
     replay.setButtonText(archivePlaying ? "PAUSE REPLAY" : "REPLAY");
     if (tab == 0 && proc.value("bot") > .5f && game.turn < 0 && !legal.empty())
         execute(game.bot(int(proc.value("botStyle"))));
@@ -829,11 +887,31 @@ void CheckmateEditor::restore()
     flipped = bool(s.getProperty("flipped", false));
     archiveIndex = juce::jlimit(0, 4, int(s.getProperty("archive", 0)));
     archivePly = juce::jlimit(0, checkmate::archiveMoves[archiveIndex].size(), int(s.getProperty("ply", 0)));
+    archiveBoard.reset();
+    archiveLastMove = {};
+    for (int moveIndex = 0; moveIndex < archivePly; ++moveIndex)
+    {
+        checkmate::Move move;
+        if (!archiveBoard.playSan(checkmate::archiveMoves[archiveIndex][moveIndex].toStdString(), move))
+        {
+            archivePly = 0;
+            archiveBoard.reset();
+            break;
+        }
+        archiveBoard.applyUnchecked(move);
+        archiveLastMove = move;
+    }
     archive.setSelectedId(archiveIndex + 1, juce::dontSendNotification);
     proc.tension = game.tension();
     status = legal.empty() ? (game.check(game.turn) ? "Checkmate" : "Stalemate")
                            : juce::String(game.turn == 1 ? "White" : "Black") + " to move";
     tab = juce::jlimit(0, 5, int(s.getProperty("tab", 0)));
+    if (tab == 3)
+    {
+        status = archivePly == 0 ? "Archive ready to replay" :
+                 "Archive move " + juce::String(archivePly);
+        proc.tension = archiveBoard.tension();
+    }
     uiGames = proc.gameSnapshot();
     refreshGameList();
     refreshSampleInfo();
@@ -1036,8 +1114,18 @@ void CheckmateEditor::exportGameMidi()
                                     juce::dontSendNotification);
         });
 }
+void CheckmateEditor::refreshSampleHealth()
+{
+    const auto paths = proc.pieceSamplePaths();
+    for (int piece = 0; piece < 6; ++piece)
+        sampleMissingCache[size_t(piece)] = paths[size_t(piece)].isNotEmpty() &&
+                                           !juce::File(paths[size_t(piece)]).existsAsFile();
+    lastSampleHealthCheck = juce::Time::getMillisecondCounter();
+    repaint();
+}
 void CheckmateEditor::refreshSampleInfo()
 {
+    refreshSampleHealth();
     const auto paths = proc.pieceSamplePaths();
     const int piece = juce::jlimit(0, 5, samplePiece.getSelectedId() - 1);
     sampleInfo.setText(paths[size_t(piece)].isEmpty() ?

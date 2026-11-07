@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Checkmate VERSION 1.0.0 LANGUAGES C CXX)
+project(Checkmate VERSION 2.1.0 LANGUAGES C CXX)
 option(CHECKMATE_CORE_ONLY "Build dependency-free engine tests only" OFF)
 include(CTest)
 if(BUILD_TESTING)

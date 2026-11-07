@@ -14,6 +14,8 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     CheckmateProcessor &proc;
     juce::LookAndFeel_V4 look;
     checkmate::Chess game;
+    checkmate::Chess archiveBoard;
+    checkmate::Move archiveLastMove{};
     std::vector<checkmate::Move> history;
     std::vector<checkmate::Move> legal;
     int selected = -1, tab = 0, palette = 2, archiveIndex = 0, archivePly = 0, pieceEdit = 0;
@@ -52,6 +54,8 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
         ratchetAttach, swingAttach;
     juce::ListBox movesList;
     juce::Label gameInfo, sampleInfo, editInfo;
+    std::array<bool, 6> sampleMissingCache{};
+    juce::uint32 lastSampleHealthCheck = 0;
     CheckmateProcessor::GameBank uiGames;
     int selectedMove = -1;
     bool updatingMoveEditor = false;
@@ -63,6 +67,7 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void buildDials();
     void addDial(const juce::String &, const juce::String &);
     void newMatch();
+    void restartArchive();
     void execute(checkmate::Move, bool sound = true);
     void archiveStep();
     void persist();
@@ -75,6 +80,7 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void refreshGameList();
     void editSelectedMove();
     void refreshSampleInfo();
+    void refreshSampleHealth();
     void savePresetPack();
     void openPresetPack();
     int getNumRows() override;

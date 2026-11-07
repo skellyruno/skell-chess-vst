@@ -20,6 +20,18 @@ int main()
         auto pawnCapture = checkmate::importPgn("1. e4 d5 2. exd5 Qxd5 *");
         check(bool(pawnCapture), pawnCapture.error.c_str());
         check(pawnCapture.games[0].moves[2].action == 1, "capture event");
+        auto noResults = checkmate::importPgn(
+            "[Event \"First\"]\n1. e4 e5\n[Event \"Second\"]\n1. d4 d5");
+        check(bool(noResults) && noResults.games.size() == 2, "PGN headers split games without results");
+        check(noResults.games[0].moves.size() == 2 &&
+              noResults.games[1].moves.size() == 2, "game boundaries preserve move lists");
+        check(!checkmate::importPgn("1. e4 ) e5").error.empty(), "unmatched variation close rejected");
+        std::string excessGames;
+        for (int gameIndex = 0; gameIndex < 33; ++gameIndex) excessGames += "1. e4 e5 1-0\n";
+        check(!checkmate::importPgn(excessGames).error.empty(), "33-game PGN rejected");
+        auto castle = checkmate::importPgn("1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. 0-0+");
+        check(bool(castle) && castle.games[0].moves.size() == 7,
+              "zero-based castling notation with check suffix");
         check(!checkmate::importPgn("1. e4 e5 2. O-O-O").error.empty(), "illegal castle rejected");
         check(!checkmate::importPgn("[SetUp \"1\"] 1. e4").error.empty(), "nonstandard FEN rejected");
         check(!checkmate::importPgn("1. e9").error.empty(), "invalid token rejected");
