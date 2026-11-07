@@ -54,6 +54,8 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
         ratchetAttach, swingAttach;
     juce::ListBox movesList;
     juce::Label gameInfo, sampleInfo, editInfo;
+    std::array<bool, 6> sampleMissingCache{};
+    juce::uint32 lastSampleHealthCheck = 0;
     CheckmateProcessor::GameBank uiGames;
     int selectedMove = -1;
     bool updatingMoveEditor = false;
@@ -78,6 +80,7 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void refreshGameList();
     void editSelectedMove();
     void refreshSampleInfo();
+    void refreshSampleHealth();
     void savePresetPack();
     void openPresetPack();
     int getNumRows() override;

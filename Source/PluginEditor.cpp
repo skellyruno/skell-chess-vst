@@ -262,6 +262,7 @@ void CheckmateEditor::showTab(int t)
     tab = t;
     if (previousTab != tab)
     {
+        if (tab == 5) refreshSampleInfo();
         if (tab == 3)
             status = archivePly == 0 ? "Archive ready to replay" :
                                             "Archive move " + juce::String(archivePly);
@@ -669,7 +670,7 @@ void CheckmateEditor::paint(juce::Graphics &g)
             pieceIcon(g, i + 1, {45.f, 193.f + i * 78, 54.f, 48.f});
             text(g, juce::String(pieceNames[i]).toUpperCase(), 116, 191.f + i * 78, 160, 22, 15, white);
             const auto &path = paths[size_t(i)];
-            const bool missing = path.isNotEmpty() && !juce::File(path).existsAsFile();
+            const bool missing = sampleMissingCache[size_t(i)];
             const auto label = path.isEmpty() ? juce::String("OSCILLATOR / FACTORY") :
                   juce::File(path).getFileName() + (missing ? " / FILE MISSING" : " / READY");
             text(g, label, 116, 216.f + i * 78, 407, 20, 12,
@@ -826,6 +827,8 @@ void CheckmateEditor::archiveStep()
 }
 void CheckmateEditor::timerCallback()
 {
+    if (tab == 5 && juce::Time::getMillisecondCounter() - lastSampleHealthCheck > 5000u)
+        refreshSampleHealth();
     if (revision != proc.stateRevision.load())
     {
         revision = proc.stateRevision.load();
@@ -1111,8 +1114,18 @@ void CheckmateEditor::exportGameMidi()
                                     juce::dontSendNotification);
         });
 }
+void CheckmateEditor::refreshSampleHealth()
+{
+    const auto paths = proc.pieceSamplePaths();
+    for (int piece = 0; piece < 6; ++piece)
+        sampleMissingCache[size_t(piece)] = paths[size_t(piece)].isNotEmpty() &&
+                                           !juce::File(paths[size_t(piece)]).existsAsFile();
+    lastSampleHealthCheck = juce::Time::getMillisecondCounter();
+    repaint();
+}
 void CheckmateEditor::refreshSampleInfo()
 {
+    refreshSampleHealth();
     const auto paths = proc.pieceSamplePaths();
     const int piece = juce::jlimit(0, 5, samplePiece.getSelectedId() - 1);
     sampleInfo.setText(paths[size_t(piece)].isEmpty() ?
