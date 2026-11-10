@@ -279,9 +279,8 @@ int main()
             persistedMatch.setProperty("moves", "52:36,12:28,", nullptr);
             visual.setSession(persistedMatch);
             auto editor = std::unique_ptr<juce::AudioProcessorEditor>(visual.createEditor());
-            // A created JUCE editor is not automatically visible when no host
-            // owns it. Without this, paintEntireComponent can produce a fully
-            // transparent screenshot yet still report success writing the PNG.
+            // Construct the editor exactly as a host does; each snapshot
+            // fully owns its offscreen Graphics lifecycle before validation.
             editor->setVisible(true);
             auto clickButton = [&](const juce::String &name)
             {
@@ -333,9 +332,12 @@ int main()
                 require(target != nullptr, "tab button exists");
                 target->onClick();
                 editor->setSize(1080, 720);
-                juce::Image shot(juce::Image::ARGB, 1080, 720, true);
-                juce::Graphics g(shot);
-                editor->paintEntireComponent(g, true);
+                // JUCE snapshots finish painting and release their Graphics
+                // context before returning. Reading/writing pixels while that
+                // context is still alive silently saved transparent frames.
+                juce::Image shot = editor->createComponentSnapshot(editor->getLocalBounds());
+                require(shot.isValid() && shot.getWidth() == 1080 && shot.getHeight() == 720,
+                        "full-size UI snapshot dimensions");
                 require(shot.getPixelAt(10, 10).getAlpha() > 240,
                         "full-size UI snapshot must contain painted pixels");
                 auto name = juce::String("Checkmate-") + juce::String(tab).replace(" ", "-") + ".png";
@@ -354,9 +356,9 @@ int main()
                     require(editor->getLocalBounds().contains(bounds),
                             "visible UI controls stay inside editor at minimum size");
                 }
-                juce::Image small(juce::Image::ARGB, 810, 540, true);
-                juce::Graphics sg(small);
-                editor->paintEntireComponent(sg, true);
+                juce::Image small = editor->createComponentSnapshot(editor->getLocalBounds());
+                require(small.isValid() && small.getWidth() == 810 && small.getHeight() == 540,
+                        "minimum-size UI snapshot dimensions");
                 require(small.getPixelAt(10, 10).getAlpha() > 240,
                         "minimum-size UI snapshot must contain painted pixels");
                 auto smallFile = juce::File::getCurrentWorkingDirectory().getChildFile("Small-" + name);
