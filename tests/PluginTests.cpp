@@ -301,6 +301,19 @@ int main()
             clickButton("MATCH");
             require(visual.sessionCopy()["moves"].toString() == "52:36,12:28,",
                     "match survives navigation back from archive");
+            // Exercise an actual slider attachment, not just the audio params.
+            clickButton("SOUND LAB");
+            juce::Slider *resonanceDial = nullptr;
+            for (auto *child : editor->getChildren())
+                if (auto *slider = dynamic_cast<juce::Slider *>(child))
+                    if (slider->getTooltip().startsWith("RESONANCE /"))
+                        resonanceDial = slider;
+            require(resonanceDial != nullptr && resonanceDial->isVisible(),
+                    "Sound Lab resonance dial is interactive");
+            resonanceDial->setValue(8.25, juce::sendNotificationSync);
+            require(std::abs(visual.value("resonance") - 8.25f) < .03f,
+                    "Sound Lab dial updates the DSP parameter");
+            clickButton("MATCH");
 
             for (auto tab : {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE", "GAME LAB", "SAMPLES"})
             {
