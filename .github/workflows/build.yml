@@ -14,6 +14,17 @@ jobs:
         run: cmake --build build --config Release --parallel 2
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Collect UI previews
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path ui-previews -Force | Out-Null
+          Copy-Item 'build/Checkmate-*.png' ui-previews -ErrorAction Stop
+          Copy-Item 'build/Small-Checkmate-*.png' ui-previews -ErrorAction Stop
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Checkmate-UI-Previews
+          path: ui-previews/
+          if-no-files-found: error
       - name: Package VST3 and Standalone
         shell: pwsh
         run: |

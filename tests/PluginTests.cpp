@@ -176,6 +176,11 @@ int main()
         juce::String error;
         require(gameProcessor.loadPieceSample(0, sampleFile, error), "sample load");
         require(!gameProcessor.pieceSamplePaths()[0].isEmpty(), "piece sample path active");
+        require(gameProcessor.cachedSampleBufferCount() == 1, "one decoded sample cached");
+        // Replacing the same sample should reclaim the inactive older buffer.
+        require(gameProcessor.loadPieceSample(0, sampleFile, error), "sample hot-swap load");
+        require(gameProcessor.cachedSampleBufferCount() == 1,
+                "sample reloading does not grow decoded memory without bound");
         gameProcessor.getStateInformation(gameState);
         CheckmateProcessor samplesRestored;
         samplesRestored.setStateInformation(gameState.getData(), int(gameState.getSize()));
@@ -183,6 +188,48 @@ int main()
                 "sample file path survives save/restore");
         sampleFile.deleteFile();
         gameProcessor.clearPieceSample(0);
+        require(gameProcessor.cachedSampleBufferCount() == 0,
+                "clearing an inactive sample releases decoded memory");
+        // A sounding voice must continue using its old buffer after the user
+        // removes/replaces the piece sample. It may be retired only after its
+        // last voice finishes, and never on the audio thread.
+        auto activeFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                          .getNonexistentChildFile("Checkmate-Active-Sample", ".wav", false);
+        {
+            std::unique_ptr<juce::OutputStream> fileOutput =
+                std::make_unique<juce::FileOutputStream>(activeFile);
+            juce::WavAudioFormat format;
+            auto writer = format.createWriterFor(fileOutput,
+                juce::AudioFormatWriterOptions{}.withSampleRate(48000.0)
+                    .withNumChannels(2).withBitsPerSample(16));
+            require(writer != nullptr, "active WAV fixture writer");
+            juce::AudioBuffer<float> sample(2, 4800);
+            for (int i = 0; i < sample.getNumSamples(); ++i)
+            {
+                sample.setSample(0, i, .25f);
+                sample.setSample(1, i, .25f);
+            }
+            require(writer->writeFromAudioSampleBuffer(sample, 0, sample.getNumSamples()),
+                    "write active WAV fixture");
+        }
+        CheckmateProcessor hotSwap;
+        hotSwap.setRateAndBufferSizeDetails(48000, 256);
+        hotSwap.prepareToPlay(48000, 256);
+        require(hotSwap.loadPieceSample(0, activeFile, error), "active sample loaded");
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, .9f), 0);
+        hotSwap.processBlock(audio, midi);
+        hotSwap.clearPieceSample(0);
+        require(hotSwap.cachedSampleBufferCount() == 1, "active sample retained through clearing");
+        for (int block = 0; block < 22; ++block)
+        {
+            midi.clear();
+            hotSwap.processBlock(audio, midi);
+        }
+        hotSwap.clearPieceSample(0);
+        require(hotSwap.cachedSampleBufferCount() == 0, "retired active buffer reclaimed after voice end");
+        activeFile.deleteFile();
+        require(hotSwap.getLatencySamples() == 0, "plugin has no reported look-ahead latency");
         PlayHead ph;
         p.prepareToPlay(48000, 256);
         p.setPlayHead(&ph);
@@ -244,6 +291,10 @@ int main()
                 throw std::runtime_error("missing UI button");
             };
             clickButton("ARCHIVE");
+            for (auto *child : editor->getChildren())
+                if (auto *button = dynamic_cast<juce::TextButton *>(child))
+                    if (button->getButtonText() == "PLAY MATRIX")
+                        require(!button->isVisible(), "archive no longer exposes matrix transport");
             clickButton("STEP GAME");
             require(visual.sessionCopy()["moves"].toString() == "52:36,12:28,",
                     "archive replay does not erase current match");
@@ -275,6 +326,15 @@ int main()
                 juce::PNGImageFormat png;
                 require(png.writeImageToStream(shot, out), "preview render");
                 editor->setSize(810, 540);
+                for (auto *child : editor->getChildren())
+                {
+                    if (!child->isVisible()) continue;
+                    const auto bounds = child->getBounds();
+                    require(bounds.getWidth() > 0 && bounds.getHeight() > 0,
+                            "visible UI control has positive size");
+                    require(editor->getLocalBounds().contains(bounds),
+                            "visible UI controls stay inside editor at minimum size");
+                }
                 juce::Image small(juce::Image::ARGB, 810, 540, true);
                 juce::Graphics sg(small);
                 editor->paintEntireComponent(sg, true);

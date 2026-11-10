@@ -769,6 +769,33 @@ std::array<juce::String, 6> CheckmateProcessor::pieceSamplePaths() const
     const juce::ScopedLock lock(dataLock);
     return samplePaths;
 }
+size_t CheckmateProcessor::cachedSampleBufferCount() const
+{
+    const juce::ScopedLock lock(dataLock);
+    return sampleStorage.size();
+}
+void CheckmateProcessor::reclaimRetiredSamples()
+{
+    // Protect the interval from the callback's initial bank load through the
+    // last synth.render(). Old SampleData pointers can outlive their bank while
+    // a release envelope / sample is still sounding.
+    if (gameReaders.load(std::memory_order_seq_cst) != 0)
+        return;
+    const auto *current = sampleData.load(std::memory_order_acquire);
+    sampleVersions.erase(std::remove_if(sampleVersions.begin(), sampleVersions.end(),
+        [current](const std::unique_ptr<SampleBank> &bank) { return bank.get() != current; }),
+        sampleVersions.end());
+    sampleStorage.erase(std::remove_if(sampleStorage.begin(), sampleStorage.end(),
+        [current](const std::unique_ptr<checkmate::SampleData> &sample)
+        {
+            if (sample->activeVoices.load(std::memory_order_acquire) != 0)
+                return false;
+            for (auto *published : current->pieces)
+                if (published == sample.get())
+                    return false;
+            return true;
+        }), sampleStorage.end());
+}
 bool CheckmateProcessor::loadPieceSample(int piece, const juce::File &file, juce::String &error)
 {
     if (piece < 0 || piece >= 6) { error = "Invalid piece"; return false; }
@@ -812,6 +839,7 @@ bool CheckmateProcessor::loadPieceSample(int piece, const juce::File &file, juce
     samplePaths[size_t(piece)] = file.getFullPathName();
     sampleData.store(bank.get(), std::memory_order_release);
     sampleVersions.push_back(std::move(bank));
+    reclaimRetiredSamples();
     error.clear();
     return true;
 }
@@ -824,6 +852,7 @@ void CheckmateProcessor::clearPieceSample(int piece)
     samplePaths[size_t(piece)].clear();
     sampleData.store(bank.get(), std::memory_order_release);
     sampleVersions.push_back(std::move(bank));
+    reclaimRetiredSamples();
 }
 void CheckmateProcessor::reloadSamplePaths()
 {

@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -48,6 +49,9 @@ struct SampleData
 {
     double sampleRate = 44100;
     std::vector<float> left, right;
+    // Referenced by live voices. Older decoded buffers can be reclaimed safely
+    // from the message thread once no voice and no audio callback uses them.
+    mutable std::atomic<int> activeVoices{0};
     bool valid() const { return sampleRate > 0 && left.size() >= 2 && right.size() == left.size(); }
 };
 struct Voice
@@ -106,7 +110,10 @@ class Synth
     void reset()
     {
         for (auto &v : voices)
+        {
+            releaseSample(v);
             v = {};
+        }
         stolenVoices = 0;
         std::fill(delayL.begin(), delayL.end(), 0.f);
         std::fill(delayR.begin(), delayR.end(), 0.f);
@@ -158,6 +165,7 @@ class Synth
         const float tailLeft = (v.active ? v.lastLeft : 0.f) + v.stealLeft * fadeGain;
         const float tailRight = (v.active ? v.lastRight : 0.f) + v.stealRight * fadeGain;
         if (v.active) ++stolenVoices;
+        releaseSample(v);
         v = {};
         v.stealLeft = tailLeft;
         v.stealRight = tailRight;
@@ -168,6 +176,8 @@ class Synth
         v.piece = piece;
         v.wave = cfg.wave;
         v.sampleData = sampleData != nullptr && sampleData->valid() ? sampleData : nullptr;
+        if (v.sampleData)
+            v.sampleData->activeVoices.fetch_add(1, std::memory_order_relaxed);
         v.sampleStep = v.sampleData ? (v.sampleData->sampleRate / rate) *
                        std::pow(2., (note - 60) / 12.) : 1;
         v.external = external;
@@ -237,6 +247,7 @@ class Synth
                 if (v.level <= 0)
                 {
                     v.active = false;
+                    releaseSample(v);
                     continue;
                 }
             }
@@ -258,6 +269,7 @@ class Synth
                 if (i + 1 >= data.left.size())
                 {
                     v.active = false;
+                    releaseSample(v);
                     continue;
                 }
                 const float frac = float(v.samplePosition - double(i));
@@ -383,6 +395,14 @@ class Synth
     int stealFadeSamples = 176;
     static constexpr size_t triangleTableSize = 2048;
     std::array<std::array<float, triangleTableSize + 1>, 8> triangleTables{};
+    static void releaseSample(Voice &v)
+    {
+        if (v.sampleData)
+        {
+            v.sampleData->activeVoices.fetch_sub(1, std::memory_order_relaxed);
+            v.sampleData = nullptr;
+        }
+    }
     static void releaseVoice(Voice &v)
     {
         if (!v.releasing)

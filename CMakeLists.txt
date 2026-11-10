@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Checkmate VERSION 2.3.0 LANGUAGES C CXX)
+project(Checkmate VERSION 2.4.0 LANGUAGES C CXX)
 option(CHECKMATE_CORE_ONLY "Build dependency-free engine tests only" OFF)
 option(CHECKMATE_BUILD_CPU_BENCH "Build standalone offline DSP profiling executable" OFF)
 if(CHECKMATE_BUILD_CPU_BENCH)
