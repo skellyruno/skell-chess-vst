@@ -56,7 +56,9 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     juce::ListBox movesList;
     juce::Label gameInfo, sampleInfo, editInfo;
     std::array<bool, 6> sampleMissingCache{};
+    std::array<juce::String, 6> sampleDisplayPaths{};
     juce::uint32 lastSampleHealthCheck = 0;
+    int idleRefreshCounter = 0;
     CheckmateProcessor::GameBank uiGames;
     int selectedMove = -1;
     bool updatingMoveEditor = false;

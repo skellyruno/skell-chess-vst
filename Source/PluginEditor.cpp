@@ -381,11 +381,13 @@ void CheckmateEditor::resized()
     const bool lab = tab == 2, matrixPage = tab == 1, gamePage = tab == 4,
                samplePage = tab == 5;
     reset.setButtonText(matrixPage ? "CLEAR MATRIX" : tab == 3 ? "RESTART ARCHIVE" : "NEW MATCH");
-    play.setVisible(tab == 0 || matrixPage || tab == 3 || gamePage);
+    // Archive has dedicated STEP / REPLAY buttons. A second PLAY MATRIX button
+    // on that page previously started the unrelated Matrix transport.
+    play.setVisible(tab == 0 || matrixPage || gamePage);
     if (gamePage) bounds(play, 594, 308, 218, 36);
-    division.setVisible(!lab && !samplePage);
+    division.setVisible(tab == 0 || matrixPage || gamePage);
     if (gamePage) bounds(division, 828, 308, 224, 36);
-    exportMidi.setVisible(tab == 0 || matrixPage || tab == 3);
+    exportMidi.setVisible(tab == 0 || matrixPage);
     pattern.setVisible(matrixPage);
     reset.setVisible(tab == 0 || matrixPage || tab == 3);
     bot.setVisible(tab == 0);
@@ -685,7 +687,9 @@ void CheckmateEditor::paint(juce::Graphics &g)
         g.fillRoundedRectangle(580, 184, 486, 338, 8);
         g.setColour(border);
         g.drawRoundedRectangle(580.5f, 184.5f, 485.f, 337.f, 8.f, 1.f);
-        const auto paths = proc.pieceSamplePaths();
+        // Display snapshot is refreshed on page entry and periodically, not
+        // under the sample-bank lock on every 30-Hz paint.
+        const auto &paths = sampleDisplayPaths;
         for (int i = 0; i < 6; ++i)
         {
             juce::Rectangle<float> r(28.f, 185.f + i * 78, 538.f, 66.f);
@@ -884,7 +888,18 @@ void CheckmateEditor::timerCallback()
         archiveStep();
         nextArchive = now + 60000 / proc.value("bpm");
     }
-    repaint();
+    // Idle pages need no full-window 30-fps redraw. Component attachments
+    // repaint their own knobs/buttons immediately; only the live meter,
+    // animation and transport need frequent background repaints.
+    const bool animated = archivePlaying || proc.activeVoices.load(std::memory_order_relaxed) > 0 ||
+                          proc.peak.load(std::memory_order_relaxed) > .002f ||
+                          proc.value("run") > .5f ||
+                          (tab == 0 && proc.value("bot") > .5f && game.turn < 0);
+    if (animated || ++idleRefreshCounter >= 6)
+    {
+        idleRefreshCounter = 0;
+        repaint();
+    }
 }
 void CheckmateEditor::persist()
 {
@@ -1154,17 +1169,17 @@ void CheckmateEditor::exportGameMidi()
 }
 void CheckmateEditor::refreshSampleHealth()
 {
-    const auto paths = proc.pieceSamplePaths();
+    sampleDisplayPaths = proc.pieceSamplePaths();
     for (int piece = 0; piece < 6; ++piece)
-        sampleMissingCache[size_t(piece)] = paths[size_t(piece)].isNotEmpty() &&
-                                           !juce::File(paths[size_t(piece)]).existsAsFile();
+        sampleMissingCache[size_t(piece)] = sampleDisplayPaths[size_t(piece)].isNotEmpty() &&
+                                           !juce::File(sampleDisplayPaths[size_t(piece)]).existsAsFile();
     lastSampleHealthCheck = juce::Time::getMillisecondCounter();
     repaint();
 }
 void CheckmateEditor::refreshSampleInfo()
 {
     refreshSampleHealth();
-    const auto paths = proc.pieceSamplePaths();
+    const auto &paths = sampleDisplayPaths;
     const int piece = juce::jlimit(0, 5, samplePiece.getSelectedId() - 1);
     sampleInfo.setText(paths[size_t(piece)].isEmpty() ?
             "No sample loaded / original synthesized voice active" :

@@ -41,11 +41,19 @@ The Samples view marks missing files and caches those checks to keep redraws fas
 PGN imports now handle games without results, reject unmatched variations, and
 accept common zero-based castling notation with check/checkmate suffixes.
 
-## Checkmate 2.3 — games, samples, and refined workflow
+## Checkmate 2.4 — games, samples, and refined workflow
 
 **Six tabs:** Match, Matrix, Sound Lab, Archive, **Game Lab**, and **Samples**.
 The default window is now 945×630, with a fixed 3:2 resize ratio. Dark graphite,
 soft ivory/gold and restrained neon accents retain the original Checkmate identity.
+
+**2.4 performance and reliability:** Replacement WAV/AIFF samples remain safe while an
+older voice is still sounding; superseded decoded buffers can be reclaimed on
+the non-audio thread instead of growing indefinitely. The Archive uses its own
+STEP/REPLAY transport (not the Matrix transport), and the Samples screen caches
+file status instead of probing storage during every repaint. Idle full-window
+repainting is throttled without slowing live meters. The factory plugin and
+sample file references use the same saved-state format as earlier versions.
 
 **Game Lab**
 

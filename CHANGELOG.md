@@ -1,3 +1,12 @@
+## 2.4.0 — Sample lifetime safety and idle UI polish
+
+- Refcounted live sample-voice references; reclaim superseded decoded buffers on the message thread once no active voice or audio callback can access them. Repeated sample replacement no longer leaks decoded memory for the full lifetime of the plugin.
+- Archive view hides the misleading Matrix transport, its unrelated MIDI export button and division control. Archive continues to use STEP / REPLAY.
+- Reduced full-window idle UI repaints from 30 Hz to ~5 Hz while continuing responsive active metering, transport and attached controls.
+- Cached sample path/status display so the 30 Hz paint path never locks the sample management mutex or hits the filesystem.
+- Added regression tests for sample refcounts through voice ending, reset and stealing, live sample unload/reclamation, and minimum-size UI control bounds. CI captures full/small renders for all six pages as a separate QA artifact.
+- Existing MIDI parameter IDs, sample paths, game presets, and saved state are unchanged. VST3 latency remains zero samples.
+
 ## 2.3.0 — Voice continuity, diagnostic CPU metrics, six-page polish
 
 - Voice stealing prioritizes released / quiet voices, protects scheduled notes, and adds an allocation-free four-millisecond continuity fade during replacement. Burst polyphony regression tests added.

@@ -55,6 +55,7 @@ class CheckmateProcessor final : public juce::AudioProcessor
     bool loadPieceSample(int piece, const juce::File &file, juce::String &error);
     void clearPieceSample(int piece);
     std::array<juce::String, 6> pieceSamplePaths() const;
+    size_t cachedSampleBufferCount() const; // diagnostics, message thread only
     void reloadSamplePaths();
 
   private:
@@ -80,6 +81,7 @@ class CheckmateProcessor final : public juce::AudioProcessor
     std::vector<std::unique_ptr<SampleBank>> sampleVersions;
     std::vector<std::unique_ptr<checkmate::SampleData>> sampleStorage;
     std::array<juce::String, 6> samplePaths{};
+    void reclaimRetiredSamples(); // called under dataLock, never on audio thread
     std::array<std::array<int, 64>, 16> matrixSlots{};
     struct Future
     {
