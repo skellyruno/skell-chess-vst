@@ -38,6 +38,9 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     look.setColour(juce::TextButton::textColourOffId, white);
     setLookAndFeel(&look);
     const char *tabNames[] = {"MATCH", "MATRIX", "SOUND LAB", "ARCHIVE", "GAME LAB", "SAMPLES"};
+    helpTour.setTooltip("Help / Show Tutorial");
+    helpTour.onClick=[this]{showGuidedTour(false);};
+    addAndMakeVisible(helpTour);
     for (int i = 0; i < 6; ++i)
     {
         addAndMakeVisible(tabs[i]);
@@ -258,12 +261,35 @@ CheckmateEditor::CheckmateEditor(CheckmateProcessor &p) : AudioProcessorEditor(p
     getConstrainer()->setFixedAspectRatio(1.5);
     setSize(945, 630);
     startTimerHz(30);
+    showGuidedTour(true);
 }
 CheckmateEditor::~CheckmateEditor()
 {
     stopTimer();
     archivePlaying = false;
     setLookAndFeel(nullptr);
+}
+void CheckmateEditor::showGuidedTour(bool firstRun)
+{
+    std::vector<skellcore::ui::GuidedTourStep> steps;
+    steps.emplace_back(&tabs[0],"PLAY THE MATCH",
+        "On MATCH, move chess pieces and hear their musical responses.");
+    steps.emplace_back(&tabs[1],"BUILD A MATRIX",
+        "MATRIX turns moves and patterns into rhythmic sequences.");
+    steps.emplace_back(&tabs[2],"DESIGN THE SOUND",
+        "SOUND LAB changes each chess piece's sound and voice.");
+    steps.emplace_back(&tabs[3],"REPLAY CLASSIC GAMES",
+        "ARCHIVE lets you follow and replay the included chess games.");
+    steps.emplace_back(&tabs[4],"IMPORT YOUR GAME",
+        "GAME LAB imports PGN games and lets you edit generated notes and MIDI.");
+    steps.emplace_back(&tabs[5],"USE YOUR SAMPLES",
+        "SAMPLES assigns custom audio to chess pieces and supports sample packs.");
+    steps.emplace_back(&preset,"STARTING SOUNDS",
+        "Factory presets provide musical starting points. Press ? to replay this guide.");
+    guidedTour.setPalette({gold,panel,white,muted,juce::Colour(0xd9000000)});
+    guidedTour.setSteps(std::move(steps));
+    if(firstRun)guidedTour.startIfFirstRun();
+    else guidedTour.replay();
 }
 void CheckmateEditor::showTab(int t)
 {
@@ -356,6 +382,7 @@ void CheckmateEditor::resized()
     for (int i = 0; i < 6; ++i)
         bounds(tabs[size_t(i)], 264 + i * 99, 21, 94, 30);
     bounds(preset, 861, 21, 191, 30);
+    bounds(helpTour, 1054, 21, 24, 30);
     bounds(root, 28, 83, 72, 30);
     bounds(scale, 110, 83, 216, 30);
     bounds(sync, 344, 83, 109, 30);
