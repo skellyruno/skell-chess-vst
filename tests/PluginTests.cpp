@@ -282,6 +282,32 @@ int main()
             // Construct the editor exactly as a host does; each snapshot
             // fully owns its offscreen Graphics lifecycle before validation.
             editor->setVisible(true);
+            auto* actualEditor=dynamic_cast<CheckmateEditor*>(editor.get());
+            require(actualEditor != nullptr,"Checkmate editor type for guided tour");
+            bool hasGuidedTour=false;
+            for(auto* child:editor->getChildren())
+                if(child->getComponentID()=="skellcore-guided-tour" && child->isVisible())
+                    hasGuidedTour=true;
+            require(hasGuidedTour,"first-launch GuidedTour overlay was not visible");
+            editor->setSize(1080,720);
+            juce::Image firstTour=editor->createComponentSnapshot(editor->getLocalBounds());
+            require(firstTour.isValid() && firstTour.getWidth()==1080,
+                    "actual GuidedTour screenshot failed");
+            juce::PNGImageFormat tourFormat;
+            auto firstTourFile=juce::File::getCurrentWorkingDirectory()
+                .getChildFile("Checkmate-Guided-Tour.png");
+            firstTourFile.deleteFile();
+            juce::FileOutputStream firstTourStream(firstTourFile);
+            require(tourFormat.writeImageToStream(firstTour,firstTourStream),
+                    "failed writing real GuidedTour PNG");
+            actualEditor->dismissGuidedTourForScreenshot();
+            auto normal=editor->createComponentSnapshot(editor->getLocalBounds());
+            int tourDifference=0;
+            for(int y=20;y<720;y+=22)
+                for(int x=20;x<1080;x+=22)
+                    tourDifference+=firstTour.getPixelAt(x,y)!=normal.getPixelAt(x,y);
+            require(tourDifference>80,"tutorial and normal editor snapshots are identical");
+
             auto clickButton = [&](const juce::String &name)
             {
                 for (auto *child : editor->getChildren())
