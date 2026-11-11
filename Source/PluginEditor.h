@@ -11,6 +11,11 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void paint(juce::Graphics &) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent &) override;
+    void dismissGuidedTourForScreenshot() { guidedTour.dismiss(); }
+    bool replayGuidedTourForScreenshot() {
+        showGuidedTour(false);
+        return guidedTour.isShowing();
+    }
 
   private:
     CheckmateProcessor &proc;
