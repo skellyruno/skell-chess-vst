@@ -2,6 +2,7 @@
 #include "Archive.h"
 #include "CheckmateLookAndFeel.h"
 #include "PluginProcessor.h"
+#include <SkellCore/GuidedTour.h>
 class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::Timer, private juce::ListBoxModel
 {
   public:
@@ -10,6 +11,11 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     void paint(juce::Graphics &) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent &) override;
+    void dismissGuidedTourForScreenshot() { guidedTour.dismiss(); }
+    bool replayGuidedTourForScreenshot() {
+        showGuidedTour(false);
+        return guidedTour.isShowing();
+    }
 
   private:
     CheckmateProcessor &proc;
@@ -33,6 +39,7 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     };
     std::vector<std::unique_ptr<Dial>> dials;
     std::array<juce::TextButton, 6> tabs;
+    juce::TextButton helpTour{"?"};
     juce::TextButton play{"PLAY MATRIX"}, reset{"NEW MATCH"}, step{"STEP GAME"}, replay{"REPLAY"},
         flip{"FLIP"}, panic{"PANIC"}, exportMidi{"EXPORT MIDI"};
     juce::ToggleButton sync{"Host sync"}, midiOut{"MIDI out"}, bot{"Black bot"}, coupling{"Tension"};
@@ -65,6 +72,8 @@ class CheckmateEditor final : public juce::AudioProcessorEditor, private juce::T
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rootAttach, scaleAttach,
         divisionAttach, waveAttach, midiVoiceAttach;
     std::unique_ptr<juce::FileChooser> chooser;
+    skellcore::ui::GuidedTourController guidedTour{*this,"skell-checkmate",1};
+    void showGuidedTour(bool firstRun);
     void timerCallback() override;
     void showTab(int);
     void buildDials();
