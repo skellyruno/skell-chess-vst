@@ -66,7 +66,7 @@ target_link_libraries(Checkmate PRIVATE SkellCore::UI juce::juce_audio_utils juc
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 if(BUILD_TESTING)
   add_executable(CheckmatePluginTests tests/PluginTests.cpp)
-  target_link_libraries(CheckmatePluginTests PRIVATE Checkmate juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra)
+  target_link_libraries(CheckmatePluginTests PRIVATE Checkmate SkellCore::UI juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra)
   target_compile_definitions(CheckmatePluginTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
   target_include_directories(CheckmatePluginTests PRIVATE Source "${CMAKE_CURRENT_BINARY_DIR}/Checkmate_artefacts/JuceLibraryCode")
   target_compile_features(CheckmatePluginTests PRIVATE cxx_std_17)
