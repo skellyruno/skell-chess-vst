@@ -36,7 +36,7 @@ endif()
 # Shared opt-in onboarding. All code remains outside the real-time engine.
 FetchContent_Declare(SkellCoreGuidedTour
   GIT_REPOSITORY https://github.com/skellyruno/skell-vst-template.git
-  GIT_TAG 3306ad495c93e062e39b8abbf079534b0b53da4e
+  GIT_TAG eb56702153c4373799a4e8e2663e0f158c0115a6
   GIT_SHALLOW FALSE
   SOURCE_SUBDIR SkellCore)
 FetchContent_MakeAvailable(SkellCoreGuidedTour)
