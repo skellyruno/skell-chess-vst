@@ -1,5 +1,9 @@
 # Checkmate — JUCE VST3 / Standalone
 
+## Release status
+
+The downloadable CI preview is Windows x64 VST3 only. The Standalone target remains available for local development but is excluded from the preview artifact. The preview is unsigned, is not an installer or commercial release, and must not be redistributed. This repository currently has no root product LICENSE/COPYING/NOTICE file, and the VST3 metadata has a blank vendor URL and support email. Owner-approved licensing and contact metadata, FL Studio acceptance, signing, installer and SkellyHub update/rollback remain separate release gates.
+
 Native C++ port of the supplied `checkmate-synth.zip`, built on the supplied
 `skell-vst-template-main.zip` CMake structure. No browser, Node, React, WebView,
 API key, or web server is required at runtime.
@@ -24,16 +28,12 @@ cmake -S . -B build -A x64 -DJUCE_PATH="C:/JUCE"
 
 Output bundles:
 
-- `build/Checkmate_artefacts/Release/VST3/Checkmate.vst3`
-- `build/Checkmate_artefacts/Release/Standalone/Checkmate.exe`
+- `build/Checkmate_artefacts/Release/VST3/Checkmate.vst3` — Windows x64 VST3 bundle.
+- `build/Checkmate_artefacts/Release/Standalone/Checkmate.exe` — local development target only; it is excluded from the downloadable preview.
 
-Copy the **whole Checkmate.vst3 folder** into
-`C:/Program Files/Common Files/VST3`, then rescan plugins in FL Studio. Load it
-as an instrument. The standalone app uses JUCE's audio/MIDI settings menu.
-Select an output device and MIDI input there if needed.
+Before testing, back up any existing Checkmate.vst3 folder; never overwrite a known-good installation. Copy the **whole Checkmate.vst3 folder** into `C:/Program Files/Common Files/VST3`, then rescan plugins in FL Studio and load it as an instrument. The generated preview includes WINDOWS-VST3-INSTALL.txt with manual backup and rollback steps. The Standalone target remains available for local development and uses JUCE's audio/MIDI settings menu; it is not included in the preview artifact.
 
-The included GitHub Actions workflow builds, runs the tests, and packages both
-Windows outputs. It runs on push, pull request, or manual dispatch.
+The included GitHub Actions workflow builds and tests both local targets for compatibility, validates the Windows VST3 with pluginval strictness 5, and uploads a VST3-only preview package with provenance, SHA-256 checksums, and manual install/rollback notes. The Standalone executable is not uploaded. The workflow runs on push, pull request, or manual dispatch.
 
 **2.1 polish:** Archive replay now uses a separate board and will not overwrite an
 in-progress Match. Host tempo affects playback only when Host sync is enabled.

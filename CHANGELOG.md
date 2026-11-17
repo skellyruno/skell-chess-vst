@@ -1,3 +1,10 @@
+## 2026-11-17 — Windows VST3 preview packaging
+
+- The Windows release workflow now validates one Checkmate VST3 bundle, AMD64 PE32+ module architecture, product/vendor/version metadata, processor/controller class IDs and pluginval strictness 5 before upload.
+- The preview artifact contains the VST3 bundle only, plus source/run provenance, per-file SHA-256 checksums, a preview-only notice and manual backup/rollback instructions. The Standalone target remains available for local development but is excluded from the downloadable artifact.
+- JUCE-generated trailing commas are normalized only in the staged copy of moduleinfo.json; the build output and source bundle are not rewritten.
+- No DSP, UI, plugin identity, parameter IDs, presets or saved-state schema changed. Commercial licensing and vendor/support metadata still require owner approval.
+
 ## 2.4.0 — Sample lifetime safety and idle UI polish
 
 - Refcounted live sample-voice references; reclaim superseded decoded buffers on the message thread once no active voice or audio callback can access them. Repeated sample replacement no longer leaks decoded memory for the full lifetime of the plugin.
