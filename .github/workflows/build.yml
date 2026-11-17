@@ -1,42 +1,60 @@
-name: Checkmate Windows VST3 and Standalone
+name: Checkmate Windows VST3 Preview
 on:
   workflow_dispatch:
-  push:
   pull_request:
+  push:
+    branches: [ main ]
+
+# Only superseded PR checks may be cancelled. Main and manual builds are protected.
+concurrency:
+  group: checkmate-windows-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Configure
         run: cmake -S . -B build -A x64 -DBUILD_TESTING=ON
       - name: Build
         run: cmake --build build --config Release --parallel 2
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
-      - name: Collect UI previews
+      - name: Test VST3 package verifier
+        run: python -m unittest discover -s Tools/tests -v
+      - name: Stage and validate Windows x64 VST3 preview
+        run: python Tools/package_vst3.py --source-dir build/Checkmate_artefacts/Release/VST3 --package-dir package --version 2.4.0
+      - name: Validate Checkmate VST3 with pluginval
+        uses: Tracktion/pluginval/validate@v2.0.0-beta3
+        with:
+          plugins: package/Checkmate.vst3
+          strictness-level: 5
+          pluginval-version: v1.0.4
+      - name: Collect current-build UI previews
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path ui-previews -Force | Out-Null
           Copy-Item 'build/Checkmate-*.png' ui-previews -ErrorAction Stop
           Copy-Item 'build/Small-Checkmate-*.png' ui-previews -ErrorAction Stop
-      - uses: actions/upload-artifact@v6
+      - name: Upload separate UI preview evidence
+        uses: actions/upload-artifact@v6
         with:
           name: Checkmate-UI-Previews
           path: ui-previews/
           if-no-files-found: error
-      - name: Package VST3 and Standalone
-        shell: pwsh
-        run: |
-          $vst = 'build/Checkmate_artefacts/Release/VST3/Checkmate.vst3'
-          $exe = 'build/Checkmate_artefacts/Release/Standalone/Checkmate.exe'
-          if (!(Test-Path $vst) -or !(Test-Path $exe)) { throw 'Build outputs missing' }
-          New-Item -ItemType Directory -Path package -Force | Out-Null
-          Copy-Item $vst package -Recurse
-          Copy-Item $exe package
-          Copy-Item README.md package
-      - uses: actions/upload-artifact@v6
+          retention-days: 14
+      # Actions packages this folder directly; there is no nested ZIP and no EXE.
+      - name: Upload VST3-only engineering preview
+        uses: actions/upload-artifact@v6
         with:
-          name: Checkmate-Windows-x64
+          name: Checkmate-Windows-x64-VST3-Preview
           path: package/
           if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
