@@ -141,10 +141,17 @@ function Test-Package([string]$Root) {
     $manifestPath = Join-Path $Root 'SHA256SUMS.txt'
     $buildInfoPath = Join-Path $Root 'build-info.json'
     $previewPath = Join-Path $Root 'PREVIEW-ONLY.txt'
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $buildInfoPath -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $previewPath -PathType Leaf)) {
-        throw 'Package is missing its checksum, provenance or preview-only notice.'
+    $requiredRootFiles = @('build-info.json', 'PREVIEW-ONLY.txt', 'WINDOWS-VST3-INSTALL.txt', 'Install-CheckmatePreview.ps1', 'SHA256SUMS.txt')
+    foreach ($required in $requiredRootFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)) {
+            throw "Package is missing required file: $required"
+        }
+    }
+    $rootItems = @(Get-ChildItem -LiteralPath $Root -Force | Select-Object -ExpandProperty Name)
+    $expectedRootItems = @('Checkmate.vst3') + $requiredRootFiles
+    if ($rootItems.Count -ne $expectedRootItems.Count -or
+        @($rootItems | Where-Object { $_ -notin $expectedRootItems }).Count -ne 0) {
+        throw 'Package root contains an unexpected file or directory.'
     }
     if ((Get-Content -LiteralPath $previewPath -Raw) -notmatch 'preview') {
         throw 'Package is not marked as a preview.'
@@ -357,6 +364,17 @@ else {
     $sourceBundle = Test-Package (Get-FullPath $PackageDirectory)
 }
 $targetBundlePath = Join-Path $targetRoot 'Checkmate.vst3'
+if (-not $RollbackFrom) {
+    $packageRoot = Get-FullPath $PackageDirectory
+    $separator = [System.IO.Path]::DirectorySeparatorChar
+    $packagePrefix = $packageRoot.TrimEnd('\', '/') + $separator
+    $targetPrefix = $targetRoot.TrimEnd('\', '/') + $separator
+    if ($packageRoot -ieq $targetRoot -or
+        $targetRoot.StartsWith($packagePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $packageRoot.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Package and install directories must not overlap; the preview source must remain untouched.'
+    }
+}
 $operation = if ($RollbackFrom) { 'Restore a verified Checkmate backup' } else { 'Install or update the Checkmate VST3 preview' }
 if ($PSCmdlet.ShouldProcess($targetBundlePath, $operation)) {
     $result = Invoke-Install $sourceBundle $targetRoot
