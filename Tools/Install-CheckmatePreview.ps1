@@ -49,13 +49,13 @@ function Assert-NoReparseTree([string]$Path) {
 
 function Get-TreeManifest([string]$Root) {
     Assert-NoReparseTree $Root
-    $base = (Get-FullPath $Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $base = Get-FullPath $Root
     $result = @()
     foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Force -Recurse -ErrorAction Stop | Sort-Object FullName)) {
         if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Reparse point is not allowed: $($file.FullName)"
         }
-        $relative = $file.FullName.Substring($base.Length + 1).Replace('\', '/')
+        $relative = [System.IO.Path]::GetRelativePath($base, $file.FullName).Replace('\', '/')
         $result += [pscustomobject]@{
             path = $relative
             sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -172,9 +172,13 @@ function Test-Package([string]$Root) {
         if ($expected.ContainsKey($key)) {
             throw "Duplicate package manifest path: $relative"
         }
-        $full = Get-FullPath (Join-Path $Root ($relative.Replace('/', [System.IO.Path]::DirectorySeparatorChar)))
-        $rootPrefix = (Get-FullPath $Root).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-        if (-not $full.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $rootFull = Get-FullPath $Root
+        $full = Get-FullPath (Join-Path $rootFull ($relative.Replace('/', [System.IO.Path]::DirectorySeparatorChar)))
+        $resolvedRelative = [System.IO.Path]::GetRelativePath($rootFull, $full)
+        $parentPrefix = '..' + [System.IO.Path]::DirectorySeparatorChar
+        $altParentPrefix = '..' + [System.IO.Path]::AltDirectorySeparatorChar
+        if ([System.IO.Path]::IsPathRooted($resolvedRelative) -or $resolvedRelative -eq '..' -or
+            $resolvedRelative.StartsWith($parentPrefix) -or $resolvedRelative.StartsWith($altParentPrefix)) {
             throw "Package manifest path escapes the package root: $relative"
         }
         Assert-NoReparsePoint $full
@@ -194,8 +198,7 @@ function Test-Package([string]$Root) {
         throw 'Package contains files that are not covered by SHA256SUMS.txt, or the manifest contains extra entries.'
     }
     foreach ($file in $actualFiles) {
-        $base = (Get-FullPath $Root).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-        $relative = $file.FullName.Substring($base.Length).Replace('\', '/').ToLowerInvariant()
+        $relative = [System.IO.Path]::GetRelativePath((Get-FullPath $Root), $file.FullName).Replace('\', '/').ToLowerInvariant()
         if (-not $expected.ContainsKey($relative)) {
             throw "Unmanifested package file: $relative"
         }
@@ -366,12 +369,17 @@ else {
 $targetBundlePath = Join-Path $targetRoot 'Checkmate.vst3'
 if (-not $RollbackFrom) {
     $packageRoot = Get-FullPath $PackageDirectory
+    $packageFromTarget = [System.IO.Path]::GetRelativePath($targetRoot, $packageRoot)
+    $targetFromPackage = [System.IO.Path]::GetRelativePath($packageRoot, $targetRoot)
     $separator = [System.IO.Path]::DirectorySeparatorChar
-    $packagePrefix = $packageRoot.TrimEnd('\', '/') + $separator
-    $targetPrefix = $targetRoot.TrimEnd('\', '/') + $separator
-    if ($packageRoot -ieq $targetRoot -or
-        $targetRoot.StartsWith($packagePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $packageRoot.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $altSeparator = [System.IO.Path]::AltDirectorySeparatorChar
+    $packageIsInsideTarget = -not [System.IO.Path]::IsPathRooted($packageFromTarget) -and
+        $packageFromTarget -ne '.' -and $packageFromTarget -ne '..' -and
+        -not $packageFromTarget.StartsWith('..' + $separator) -and -not $packageFromTarget.StartsWith('..' + $altSeparator)
+    $targetIsInsidePackage = -not [System.IO.Path]::IsPathRooted($targetFromPackage) -and
+        $targetFromPackage -ne '.' -and $targetFromPackage -ne '..' -and
+        -not $targetFromPackage.StartsWith('..' + $separator) -and -not $targetFromPackage.StartsWith('..' + $altSeparator)
+    if ($packageRoot -ieq $targetRoot -or $packageIsInsideTarget -or $targetIsInsidePackage) {
         throw 'Package and install directories must not overlap; the preview source must remain untouched.'
     }
 }
