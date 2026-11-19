@@ -84,7 +84,7 @@ function New-TestPackage([string]$Root, [byte]$Marker) {
 
     $lines = @()
     foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Force -Recurse | Sort-Object FullName)) {
-        $relative = $file.FullName.Substring($Root.TrimEnd('\').Length + 1).Replace('\', '/')
+        $relative = [System.IO.Path]::GetRelativePath([System.IO.Path]::GetFullPath($Root), $file.FullName).Replace('\', '/')
         $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         $lines += "$hash  $relative"
     }
@@ -109,6 +109,8 @@ try {
     $whatIf = & $installer -PackageDirectory $package1 -Vst3Directory $dest -WhatIf -Confirm:$false
     Assert-True ([bool]$whatIf.WhatIf) 'WhatIf returns a preview result'
     Assert-True (-not (Test-Path -LiteralPath $dest)) 'WhatIf does not create the destination'
+    Assert-Fails { & $installer -PackageDirectory $package1 -Vst3Directory $package1 -Confirm:$false } 'package/install path overlap'
+    Assert-True (Test-Path -LiteralPath (Join-Path $package1 'SHA256SUMS.txt')) 'overlap rejection leaves the package intact'
 
     # Fresh per-user install.
     $first = & $installer -PackageDirectory $package1 -Vst3Directory $dest -Confirm:$false
