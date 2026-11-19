@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Configure
@@ -27,6 +27,9 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Test VST3 package verifier
         run: python -m unittest discover -s Tools/tests -v
+      - name: Test preview installer, update and rollback
+        shell: pwsh
+        run: pwsh -NoProfile -File Tools/tests/Test-Install-CheckmatePreview.ps1
       - name: Stage and validate Windows x64 VST3 preview
         run: python Tools/package_vst3.py --source-dir build/Checkmate_artefacts/Release/VST3 --package-dir package --version 2.4.0
       - name: Validate Checkmate VST3 with pluginval

@@ -60,7 +60,10 @@ class CheckmatePackageTests(unittest.TestCase):
             self.assertTrue((package / "build-info.json").is_file())
             self.assertTrue((package / "PREVIEW-ONLY.txt").is_file())
             self.assertTrue((package / "WINDOWS-VST3-INSTALL.txt").is_file())
+            self.assertTrue((package / "Install-CheckmatePreview.ps1").is_file())
             self.assertTrue((package / "SHA256SUMS.txt").is_file())
+            manifest_paths = {line.split("  ", 1)[1] for line in (package / "SHA256SUMS.txt").read_text().splitlines()}
+            self.assertIn("Install-CheckmatePreview.ps1", manifest_paths)
             self.assertFalse((package / "Checkmate.exe").exists())
             staged = json.loads((package / "Checkmate.vst3/Contents/Resources/moduleinfo.json").read_text())
             self.assertEqual(staged["Name"], "Checkmate")

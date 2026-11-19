@@ -1,3 +1,11 @@
+## 2026-11-19 — Per-user preview install, update and rollback
+
+- Added an opt-in PowerShell preview installer that defaults to the current user's `%LOCALAPPDATA%\\Programs\\Common\\VST3`; it does not self-elevate, edit the registry or DAW settings, or run a background updater.
+- The installer verifies the complete package checksum inventory, preview/provenance metadata, one Checkmate VST3 bundle, processor/controller class IDs, AMD64 PE32+ module and matching module hash before modifying the destination.
+- Updates preserve the existing bundle in a timestamped backup and verify the backup manifest before replacement. Explicit rollback restores a selected verified backup while preserving the current install and the rollback source.
+- The package now includes the installer and install/rollback guide in SHA256SUMS.txt. Windows CI exercises WhatIf, fresh install, update, backup, rollback, tamper rejection, junction rejection and missing-LOCALAPPDATA fail-closed behavior.
+- No DSP, UI, VST3 identity, parameter IDs, automation IDs, presets, or saved-state schema changed. This remains an unsigned engineering preview, not a commercial release.
+
 ## 2026-11-17 — Windows VST3 preview packaging
 
 - The Windows release workflow now validates one Checkmate VST3 bundle, AMD64 PE32+ module architecture, product/vendor/version metadata, processor/controller class IDs and pluginval strictness 5 before upload.

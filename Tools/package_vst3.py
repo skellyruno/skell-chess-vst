@@ -207,31 +207,48 @@ def stage_package(source_dir: Path, package_dir: Path, expected_version: str = E
             "fl_studio_acceptance": "not verified by CI",
             "commercial_license": "owner approval required",
             "vendor_url_and_support_email": "owner approval required",
+            "preview_installer": "included; per-user opt-in helper; no background updater",
         },
     }
     write_text(package_dir / "build-info.json", json.dumps(info, indent=2, sort_keys=True))
     write_text(package_dir / "PREVIEW-ONLY.txt", """Checkmate Windows x64 VST3 preview package.
-This is an unsigned engineering preview, not a commercial release or installer.
+This is an unsigned engineering preview, not a commercial release or commercial installer.
 Do not redistribute or use as proof of a commercial license.
-Back up any existing Checkmate.vst3 installation before manual testing.
+The package includes an optional per-user preview install/update/rollback helper.
 The package contains one VST3 bundle only; no Standalone executable is included.
 FL Studio host acceptance, licensing, vendor/support metadata and signing remain pending.
 """)
-    write_text(package_dir / "WINDOWS-VST3-INSTALL.txt", """Checkmate Windows VST3 preview — manual test install and rollback
+    installer_source = Path(__file__).with_name("Install-CheckmatePreview.ps1")
+    if not installer_source.is_file():
+        raise PackageValidationError(f"preview installer is missing: {installer_source}")
+    shutil.copy2(installer_source, package_dir / installer_source.name)
+    write_text(package_dir / "WINDOWS-VST3-INSTALL.txt", """Checkmate Windows VST3 preview — per-user install, update and rollback
 
-1. Close FL Studio and any other VST host.
-2. If Checkmate.vst3 already exists in the VST3 folder, copy the entire folder to a safe backup location first. Do not overwrite it.
-3. Copy the complete Checkmate.vst3 folder from this package into:
-   C:\\Program Files\\Common Files\\VST3
-4. Start FL Studio and rescan plugins. Load Checkmate as an instrument.
-5. Confirm MIDI input/output routing and audio before saving a project.
+1. Extract the complete preview package to a normal local folder.
+2. Close FL Studio and any other VST host before installing or updating.
+3. Preview the operation first:
+   pwsh -NoProfile -File .\\Install-CheckmatePreview.ps1 -WhatIf
+4. Install or update for the current Windows user:
+   pwsh -NoProfile -File .\\Install-CheckmatePreview.ps1
+   The default destination is %LOCALAPPDATA%\\Programs\\Common\\VST3.
+5. The helper verifies the package checksums, preview provenance, VST3 identity,
+   two class IDs, AMD64 PE32+ module and absence of Standalone executables.
+   An existing Checkmate.vst3 is copied to a verified timestamped backup before
+   it is replaced. The helper does not elevate, edit the registry, change DAW
+   settings or run a background updater.
+6. Start FL Studio, rescan plugins and load Checkmate as an instrument. Confirm
+   MIDI input/output routing and audible output before saving a project.
 
 Rollback:
-1. Close the DAW and remove only the preview Checkmate.vst3 folder you installed.
-2. Restore your backed-up Checkmate.vst3 folder to its original location.
-3. Rescan plugins in the DAW.
+1. Close FL Studio and any other VST host.
+2. Use the BackupPath printed by the installer:
+   pwsh -NoProfile -File .\\Install-CheckmatePreview.ps1 -Vst3Directory "$env:LOCALAPPDATA\\Programs\\Common\\VST3" -RollbackFrom "<backup directory>"
+3. The current install is backed up before the selected verified backup is
+   restored. The selected backup remains available for another rollback.
 
-This is a manual preview procedure, not an installer. It does not authorize commercial redistribution.
+Use -Vst3Directory for an explicit custom location. Machine-wide locations may
+require permissions; the helper never self-elevates. This is a private preview
+helper, not a commercial updater or permission to redistribute the product.
 """)
     checksum_lines = []
     for path in sorted(item for item in package_dir.rglob("*") if item.is_file()):
@@ -256,7 +273,7 @@ def main() -> int:
     for warning in plugin["metadata_warnings"]:
         print(f"RELEASE WARNING: {warning}")
     print(f"Staged preview package: {args.package_dir}")
-    print("Generated build-info.json, PREVIEW-ONLY.txt, install/rollback guide and SHA256SUMS.txt.")
+    print("Generated build-info.json, preview notice, per-user installer, install/rollback guide and SHA256SUMS.txt.")
     return 0
 
 
