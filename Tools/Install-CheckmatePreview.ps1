@@ -61,7 +61,7 @@ function Get-TreeManifest([string]$Root) {
             sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         }
     }
-    return ,$result
+    return $result
 }
 
 function Test-Vst3Bundle([string]$BundlePath) {
@@ -257,7 +257,7 @@ function New-VerifiedBackup([string]$InstalledBundle, [string]$BackupRoot) {
     if (-not (Test-Path -LiteralPath $BackupRoot -PathType Container)) {
         New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
     }
-    Assert-NoReparseTree $BackupRoot
+    Assert-NoReparsePoint $BackupRoot
     $name = 'Checkmate-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmssfff'), ([guid]::NewGuid().ToString('N'))
     $backupPath = Join-Path $BackupRoot $name
     New-Item -ItemType Directory -Path $backupPath | Out-Null
@@ -301,7 +301,7 @@ function Invoke-Install([string]$SourceBundle, [string]$TargetRoot) {
     if (-not (Test-Path -LiteralPath $TargetRoot -PathType Container)) {
         New-Item -ItemType Directory -Path $TargetRoot -Force | Out-Null
     }
-    Assert-NoReparseTree $TargetRoot
+    Assert-NoReparsePoint $TargetRoot
     $targetBundle = Join-Path $TargetRoot 'Checkmate.vst3'
     $backupRoot = Join-Path (Split-Path -Parent $TargetRoot) '.skell-backups/Checkmate'
     $backupPath = $null
